@@ -15,6 +15,10 @@ import (
 	"github.com/y0ssar1an/q"
 )
 
+const (
+	RecommendedLedgerInterval uint32 = 5
+)
+
 type Subscription struct {
 	// Keep track of contiguous ledger history we have available.
 	min, max uint32
@@ -122,7 +126,7 @@ func (sub *Subscription) SignAndSubmitFunc(wallet *Wallet, t data.Transaction) f
 
 		if !result.Validated {
 			q.Q(result)
-			return fmt.Errorf("%s transactions failed to validate.", t.GetType())
+			return fmt.Errorf("%s transaction failed to validate.", t.GetType())
 		}
 
 		if !result.MetaData.TransactionResult.Success() {
@@ -137,7 +141,7 @@ func (sub *Subscription) SignAndSubmitFunc(wallet *Wallet, t data.Transaction) f
 func (sub *Subscription) AfterSequence(until uint32) <-chan uint32 {
 
 	listener := ledgerSequenceWait{
-		c:     make(chan uint32),
+		c:     make(chan uint32, 1),
 		until: until,
 	}
 	heap.Push(sub.sequenceListeners, listener)
@@ -162,7 +166,7 @@ func (sub *Subscription) AfterTime(when interface{}) <-chan data.RippleTime {
 		log.Panicf("Unexpected %T in subscription.AfterTime()", when)
 	}
 	listener := ledgerTimeWait{
-		c:     make(chan data.RippleTime),
+		c:     make(chan data.RippleTime, 1),
 		until: *until,
 	}
 	heap.Push(sub.timeListeners, listener)
@@ -172,7 +176,7 @@ func (sub *Subscription) AfterTime(when interface{}) <-chan data.RippleTime {
 func (sub *Subscription) AfterTx(hash data.Hash256, min, max uint32) <-chan *websockets.TxResult {
 	listener := txWait{
 		hash: hash,
-		c:    make(chan *websockets.TxResult),
+		c:    make(chan *websockets.TxResult, 1),
 		min:  min,
 		max:  max,
 	}
@@ -194,6 +198,14 @@ func (sub *Subscription) Ledgers() (uint32, uint32, error) {
 	} else {
 		return sub.min, sub.max, nil
 	}
+}
+
+func (sub *Subscription) SuggestLastLedger(delta uint32) uint32 {
+	_, max, err := sub.Ledgers()
+	if err != nil {
+		log.Panic(err) // not returning error makes it easier to use this function when creating transactions.
+	}
+	return max + delta
 }
 
 func (sub *Subscription) Loop() {
@@ -235,6 +247,8 @@ func (sub *Subscription) messageLoop() {
 				}
 				sub.min = min
 				sub.max = max
+				//log.Printf("subscription: LedgerStreamMsg %d-%d\n", min, max) // debug
+				sub.mutex.Unlock() // TODO: should this be later in this function?
 
 				// Inform anyone waiting on ledgers.
 				for len(*sub.sequenceListeners) > 0 && (*sub.sequenceListeners)[0].until <= max {
@@ -251,48 +265,49 @@ func (sub *Subscription) messageLoop() {
 				}
 
 				// Here we are notifying listeners about transactions.  We could instead subscribe to the tx feed.  TODO: would doing that be more efficient?
-				//log.Printf("Looking for transaction in ledger %d\n", msg.LedgerSequence)
+				//log.Printf("Waiting on %d transactions, in ledger %d\n", sub.txListeners.Len(), msg.LedgerSequence)
+
 				//q.Q(msg)
-				for l := sub.txListeners.Front(); l != nil; l = l.Next() {
-					listener := l.Value.(*txWait)
-					if max >= listener.min {
-						select {
-						case result := <-listener.r:
+				func() { // closure, for defers...
+					for l := sub.txListeners.Front(); l != nil; l = l.Next() {
+						listener := l.Value.(*txWait)
+						if max >= listener.min {
+							select {
+							case result := <-listener.r:
 
-							// earlier request to remote.tx() has returned.
-							q.Q(result) // debug
-							listener.c <- result
-							sub.txListeners.Remove(l)
-							close(listener.c)
+								// earlier request to remote.tx() has returned.
+								//q.Q(result) // debug
+								listener.c <- result
+								close(listener.c)
+								defer sub.txListeners.Remove(l)
 
-						default:
-							if listener.r == nil {
-								// initiate a request to remote.tx()
-								go func(listener *txWait) {
+							default:
+								if listener.r == nil {
+									// initiate a request to remote.tx()
+									go func(listener *txWait) {
 
-									isLastTry := (min <= listener.min && max >= listener.max)
+										isLastTry := (min <= listener.min && max >= listener.max)
 
-									result, err := sub.Remote.Tx(listener.hash)
-									if err != nil {
-										log.Println(err)
-										listener.r = nil // We will try again, next ledger event.
-									} else {
-										// Let the listener know only about validated transactions.
-										if result.Validated || isLastTry {
-											// Note listener will receive either a validate transaction or not.
-											listener.r = make(chan *websockets.TxResult)
-											defer close(listener.r)
-											listener.r <- result
+										result, err := sub.Remote.Tx(listener.hash)
+										if err != nil {
+											log.Println(err)
+											listener.r = nil // We will try again, next ledger event.
+										} else {
+											// Let the listener know only about validated transactions.
+											if result.Validated || isLastTry {
+												// Note listener will receive either a validate transaction or not.
+												//log.Printf("subscription: found %s %s/%d, max ledger now %d", result.Transaction.GetHash(), result.Transaction.GetBase().Account, result.Transaction.GetBase().Sequence, max) // debug
+												listener.r = make(chan *websockets.TxResult, 1)
+												listener.r <- result
+												close(listener.r)
+											}
 										}
-									}
-								}(listener)
+									}(listener)
+								}
 							}
 						}
 					}
-				}
-
-				sub.mutex.Unlock()
-
+				}() // end closure
 			}
 
 			// Verbose
