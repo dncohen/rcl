@@ -98,11 +98,10 @@ func LooseLoad(source interface{}, others ...interface{}) (Config, error) {
 		}
 		if section.HasKey("address") {
 			nickname := section.Name()
-			account, err := data.NewAccountFromAddress(section.Key("address").String())
+			_, err := data.NewAccountFromAddress(section.Key("address").String())
 			if err != nil {
 				log.Printf("Bad address [%s] with nickname \"%s\"\n", section.Key("address"), section.Name())
 			} else {
-				log.Printf("Nick: %s, Acct: %s", nickname, account) // debug
 				config.accounts[nickname] = section
 			}
 		}
