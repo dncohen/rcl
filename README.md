@@ -4,13 +4,13 @@
 
 ## Quick Start for First Time Users
 
-Go get it:
+Go get rcl tools:
 
 ```
 go get -u github.com/dncohen/rcl/cmd/...
 ```
 
-Set up a working directory:
+Set up a temporary working directory:
 
 ```
 mkdir -p /tmp/rcl-altnet
@@ -68,7 +68,7 @@ Note that `rcl-tx` logs the transaction details, but it does *not* sign
 or submit the transaction.  Rather, it *pipes* the transaction to
 `stdout` (`/dev/null` in above example).
 
-Here's how to use a *pipeline* to *construct* the tranaction, and *sign* it, and *save* to a file, and *submit* it:
+Here's how to use a *pipeline* to construct the tranaction, and sign it, and save to a file, and submit it to the test net:
 
 ```
 rcl-tx -as fund send hot 100/XRP | rcl-key sign | rcl-tx save | rcl-tx submit
@@ -77,7 +77,7 @@ rcl-tx -as fund send hot 100/XRP | rcl-key sign | rcl-tx save | rcl-tx submit
 You should see `tesSUCCESS` in the output from `rcl-tx submit` (after
 verbose log output).
 
-Finally check that `hot` account has the balance of `100/XRP`:
+Finally check that `hot` account has the balance XRP sent to it:
 
 ```
 rcl-account show hot
