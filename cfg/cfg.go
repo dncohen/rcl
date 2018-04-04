@@ -106,6 +106,7 @@ func LooseLoad(source interface{}, others ...interface{}) (Config, error) {
 			}
 		}
 	}
+
 	return config, err
 }
 
@@ -117,22 +118,27 @@ func (config Config) GetAccount() string {
 	return config.Section("").Key("account").String()
 }
 
-func (config Config) GetAccountByNickname(nickname string) (*data.Account, *uint32, bool) {
+func (config Config) GetAccountByNickname(nickname string) (account *data.Account, tag *uint32, ok bool) {
+	var err error
+
 	section, ok := config.accounts[nickname]
-	var tag *uint32
-	account, err := data.NewAccountFromAddress(section.Key("address").String())
-	if err != nil {
-		log.Panicf("Bad address: %s", section.Key("address"))
-	}
-	if section.HasKey("tag") {
-		tagUint, err := section.Key("tag").Uint()
+	if ok {
+		account, err = data.NewAccountFromAddress(section.Key("address").String())
 		if err != nil {
-			log.Printf("config [%s] bad tag \"%s\": %s", section.Name(), section.Key("tag"), err)
-			log.Panic(err)
-		} else {
-			// Return *uint32
-			tmp := uint32(tagUint)
-			tag = &tmp
+			log.Printf("Bad address: %s\n", section.Key("address"))
+			return account, tag, false
+		}
+
+		if section.HasKey("tag") {
+			tagUint, err := section.Key("tag").Uint()
+			if err != nil {
+				log.Printf("config [%s] bad tag \"%s\": %s", section.Name(), section.Key("tag"), err)
+				return account, tag, false
+			} else {
+				// Return *uint32
+				tmp := uint32(tagUint)
+				tag = &tmp
+			}
 		}
 	}
 
