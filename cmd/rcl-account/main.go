@@ -124,8 +124,11 @@ func setup(fs *flag.FlagSet, args []string) (*State, []string, bool) {
 		os.Exit(2)
 	}
 
-	// TODO ensure file permission on secrets file (if present)
 	config, err = cfg.LooseLoadGlob(filepath.Join(configPath, "*.cfg"))
+	if err != nil && err != cfg.FileNotFound {
+		fmt.Println(err)
+		os.Exit(2)
+	}
 
 	if len(fs.Args()) < 1 {
 		return nil, nil, false

@@ -34,9 +34,9 @@ r9miHh8cFcCFaCprknpdFvyYcy95ZqKhun=sSomethingSecretGoesRightHere
 */
 
 import (
+	"errors"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -51,16 +51,18 @@ type Config struct {
 	accounts map[string]*ini.Section
 }
 
+var (
+	FileNotFound = errors.New("No configuration file")
+)
+
 // Helper loads multiple config files
 func LooseLoadGlob(pattern string) (Config, error) {
 	configFilenames, err := filepath.Glob(pattern)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(2)
+		return Config{}, FileNotFound
 	}
 	if len(configFilenames) == 0 {
-		fmt.Println("No configuration file found.  Create rcl.cfg.")
-		os.Exit(2)
+		return Config{}, FileNotFound
 	}
 	// https://golang.org/doc/faq#convert_slice_of_interface
 	configs := make([]interface{}, len(configFilenames))
@@ -78,8 +80,7 @@ func LooseLoad(source interface{}, others ...interface{}) (Config, error) {
 
 	config.File, err = ini.LooseLoad(source, others...)
 	if err != nil {
-		fmt.Printf("Failed to load configuration file: %s", err)
-		os.Exit(2)
+		return config, err
 	}
 	// Create a mapping of nickname -> account.
 	config.accounts = make(map[string]*ini.Section)
