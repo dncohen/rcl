@@ -1,5 +1,7 @@
 # RCL Helper Libraries and Commands
 
+*RCL* is short for Ripple Consensus Ledger.
+
 ## Quick Start for First Time Users
 
 Go get it:
@@ -28,7 +30,7 @@ Note the output of above includes...
     "secret": "<SECRET>"
 ```
 
-Copy <ADDRESS> and <SECRET> and replace into the following.
+Copy `<ADDRESS>` and `<SECRET>` and replace into the following.
 
 
 Configure rcl tools to use the altnet account:
@@ -52,29 +54,30 @@ Create a new Ripple address and master signing key with `rcl-key` tool:
 rcl-key generate -nickname hot
 ```
 
-The generated *address* does not become an *account* on the test net
-until it is funded with enough XRP to meet the reserve requirement.
+The generated *address* (nickname `hot`) does not become an *account*
+on the test net until it is funded with enough XRP to meet the reserve
+requirement.
 
-Construct a transaction to send the required XRP to the new address:
+Construct a transaction to send the required XRP to the new address with the `rcl-tx send` subcommand:
 
 ```
 rcl-tx -as fund send hot 100/XRP > /dev/null
 ```
 
-Note that `rcl-tx` logs the transaction details to stderr, but it does
-not sign or submit the transaction.  Rather, it *pipes* the
-transaction to `stdout` (redirected to `/dev/null` in above example).
+Note that `rcl-tx` logs the transaction details, but it does *not* sign
+or submit the transaction.  Rather, it *pipes* the transaction to
+`stdout` (`/dev/null` in above example).
 
-Here's how to *construct* the tranaction, *sign* it, *save* a local copy, and *submit* it:
+Here's how to use a *pipeline* to *construct* the tranaction, and *sign* it, and *save* to a file, and *submit* it:
 
 ```
 rcl-tx -as fund send hot 100/XRP | rcl-key sign | rcl-tx save | rcl-tx submit
 ```
 
 You should see `tesSUCCESS` in the output from `rcl-tx submit` (after
-a lot of verbose log output).
+verbose log output).
 
-Check that our `hot` account is on the ledger:
+Finally check that `hot` account has the balance of `100/XRP`:
 
 ```
 rcl-account show hot
