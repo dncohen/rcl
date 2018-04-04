@@ -1,6 +1,6 @@
 # RCL Helper Libraries and Commands
 
-## Quick Start for First Timers
+## Quick Start for First Time Users
 
 Go get it:
 
@@ -8,7 +8,7 @@ Go get it:
 go get -u github.com/dncohen/rcl/cmd/...
 ```
 
-Set up a sandbox:
+Set up a working directory:
 
 ```
 mkdir -p /tmp/rcl-altnet
@@ -21,32 +21,64 @@ Generate some test net XRP to play with:
 curl -s -X POST https://faucet.altnet.rippletest.net/accounts | tee testnet-fund-account.json | python -m json.tool
 ```
 
-Note the output has
+Note the output of above includes...
 
 ```
     "address": "<ADDRESS>",
     "secret": "<SECRET>"
 ```
 
-Copy <ADDRESS> and <SECRET> and replace into the following...
+Copy <ADDRESS> and <SECRET> and replace into the following.
 
 
-Configure `rcl` tools to use the altnet:
+Configure rcl tools to use the altnet account:
 
 ```
 echo -e "rippled=wss://s.altnet.rippletest.net:51233" > altnet.cfg
-echo -e "[fund]\n\taddress=<ADDRESS>\n\tsecret=<SECRET>" >> altnet.cfg
+echo -e "[<ADDRESS>]\n\tsecret=<SECRET>\n\tnickname=fund" >> altnet.cfg
 ```
 
-(You've created an alias `fund` for the testnet account with 10000 XRP.)
+(You've created a nickname `fund` for the testnet account with 10000 XRP.)
 
-Use the `rcl-account` command to inspect your account:
+Inspect your account with `rcl-account` tool:
 
 ```
 rcl-account show fund
 ```
 
+Create a new Ripple address and master signing key with `rcl-key` tool:
 
+```
+rcl-key generate -nickname hot
+```
+
+The generated *address* does not become an *account* on the test net
+until it is funded with enough XRP to meet the reserve requirement.
+
+Construct a transaction to send the required XRP to the new address:
+
+```
+rcl-tx -as fund send hot 100/XRP > /dev/null
+```
+
+Note that `rcl-tx` logs the transaction details to stderr, but it does
+not sign or submit the transaction.  Rather, it *pipes* the
+transaction to `stdout` (redirected to `/dev/null` in above example).
+
+Here's how to *construct* the tranaction, *sign* it, *save* a local copy, and *submit* it:
+
+```
+rcl-tx -as fund send hot 100/XRP | rcl-key sign | rcl-tx save | rcl-tx submit
+```
+
+You should see `tesSUCCESS` in the output from `rcl-tx submit` (after
+a lot of verbose log output).
+
+Check that our `hot` account is on the ledger:
+
+```
+rcl-account show hot
+```
 
 
 
@@ -97,13 +129,4 @@ In the directory of each command, `go run *.go` will build local files. For exam
 cd cmd/rcl-account
 go run *.go show rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B
 ```
-
-Or, install your local modifications with...
-
-```
-go get cmd/...
-```
-
-... then run `rcl-account` as you normally would.
-
 
