@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
+	"strings"
 	"text/tabwriter"
 
 	"golang.org/x/sync/errgroup"
@@ -143,19 +145,16 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 			lastActive = txResults[key].Transactions[0].LedgerSequence
 		}
 		table := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.Debug)
-		fmt.Fprintln(table, "Account\t XRP\t Sequence\tOwner Count\tLast Active\t")
-		fmt.Fprintf(table, "%s\t %s\t %d\t %d\t %d\t\n",
+		fmt.Fprintln(table, "Account\t XRP\t Sequence\tOwner Count\tLast Active\tLedger Index\t")
+		fmt.Fprintf(table, "%s\t %s\t %d\t %d\t %d\t%d\t\n",
 			account,
 			accountResult.AccountData.Balance,
 			*accountResult.AccountData.Sequence,
 			*accountResult.AccountData.OwnerCount,
 			lastActive,
+			accountResult.LedgerSequence,
 		)
 		table.Flush()
-		//fmt.Printf("%s at ledger %d\n", accountResult.AccountData.Account, accountResult.LedgerSequence)
-		//fmt.Printf("XRP balance: %s\n", accountResult.AccountData.Balance)
-
-		//q.Q(linesResults[key])
 
 		table = tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.DiscardEmptyColumns)
 		fmt.Fprintln(table, "Balances\t Amount\t Currency/Issuer\t Min\t Max\t rippling\t quality\t")
@@ -172,20 +171,48 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 		table.Flush()
 	}
 
-	offerCount := 0 // TODO only render if offers exist
-	table := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.DiscardEmptyColumns)
-	fmt.Fprintln(table, "Offers\t Sequence\t TakerGets\t TakerPays\t")
+	// Render all offers...
+	// sort all offers into human-readable order
+	type mapped struct {
+		offer   data.AccountOffer
+		account data.Account
+	}
+	byKey := make(map[string]mapped)
 	for _, account := range accounts {
 		for _, offer := range offerResults[account].Offers {
-			offerCount++
-			fmt.Fprintf(table, "%s\t %d\t %s\t %s\t\n", account, offer.Sequence, offer.TakerGets, offer.TakerPays)
+			// sortable key
+			key1 := fmt.Sprintf("%s/%s/bid/%s", offer.TakerPays.Asset(), offer.TakerGets.Asset(), offer.Quality) // Arbitrarily call one side the bid
+			key2 := fmt.Sprintf("%s/%s/ask/%s", offer.TakerGets.Asset(), offer.TakerPays.Asset(), offer.Quality) // the other side is ask.
+			// choose key so that bids and asks are next to each other in final ordering
+			key := key1
+			if strings.Compare(key1, key2) == -1 {
+				key = key2
+			}
+			byKey[key] = mapped{
+				offer:   offer,
+				account: *account,
+			}
 		}
 	}
-	table.Flush()
 
-	s.ExitNow() // debug
+	if len(byKey) > 0 {
+		table := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.DiscardEmptyColumns)
+		fmt.Fprintln(table, "Offers\t Sequence\t TakerGets\t TakerPays\t")
+
+		allKeys := make([]string, 0, len(byKey))
+		for k, _ := range byKey {
+			allKeys = append(allKeys, k)
+		}
+		sort.Strings(allKeys)
+		for _, k := range allKeys {
+			v := byKey[k]
+			fmt.Fprintf(table, "%s\t %d\t %s\t %s\t\n", v.account, v.offer.Sequence, v.offer.TakerGets, v.offer.TakerPays)
+		}
+		table.Flush()
+	}
 
 }
+
 func formatRipple(line data.AccountLine) string {
 	if line.NoRipple && line.NoRipplePeer {
 		return "none"
