@@ -152,16 +152,21 @@ func (config Config) GetAccountNickname(account data.Account) (string, bool) {
 
 // TODO support ECDSA and ed25519
 func (config Config) GetAccountKeypair(account data.Account) (util.Keypair, error) {
-	secret := config.Section("ecdsa").Key(account.String()).String()
+	// Prefered format, secret=<secret> in a [<address>] section.
+	secret := config.Section(account.String()).Key("secret").String()
+
 	if secret == "" {
-		// Top-level section is assumed ECDSA
-		secret = config.Section("").Key(account.String()).String()
+		// historical format, <address>=<secret>
+		secret := config.Section("ecdsa").Key(account.String()).String()
+		if secret == "" {
+			// Top-level section is assumed ECDSA
+			secret = config.Section("").Key(account.String()).String()
+		}
 	}
 
 	if secret == "" {
 		return util.Keypair{}, fmt.Errorf("No secret found for %s", account)
 	}
-
 	return util.NewEcdsaFromSecret(secret)
 
 }
