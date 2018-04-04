@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/gob"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -346,23 +347,16 @@ func decodeInput() (*data.Transaction, error) {
 	return &tx, nil
 }
 
-// Important: encode a *data.Transaction in order to be decoded by `rcl-key sign`.
-func encodeOutput(tx *data.Transaction, fs *flag.FlagSet, f *os.File) error {
+// Encode a transaction to JSON.  A helper function for debug output
+// and saving to file.  Note that when in pipeline, transactions
+// should be encoded and decode by the util/marshal helper package.
+func encodeJSON(tx *data.Transaction, f *os.File) error {
+	var err error
 	if f == nil {
 		f = os.Stdout
 	}
-	encoding := "gob64" // currently only method supported
-	registerTypes()
 
-	var err error
-	if encoding == "gob64" {
-		// GOB is preferable as it preserves the type of the tx we've created.
-		// However it is not terminal safe.  So we further encode to base64.
-		b64Writer := base64.NewEncoder(base64.StdEncoding, f)
-		defer b64Writer.Close()                    // Close() is important!!
-		err = gob.NewEncoder(b64Writer).Encode(tx) // Encode a *pointer* to the interface.
-	} else {
-		err = fmt.Errorf("Unexpected encoding: %s", encoding)
-	}
+	j, _ := json.MarshalIndent(tx, "", "\t")
+	_, err = fmt.Fprintln(f, string(j))
 	return err
 }
