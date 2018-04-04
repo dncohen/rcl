@@ -181,6 +181,12 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 	}
 	byKey := make(map[string]mapped)
 	for _, account := range accounts {
+
+		if offerResults[account] == nil {
+			// Account not found
+			continue
+		}
+
 		for _, offer := range offerResults[account].Offers {
 			// sortable key
 			key1 := fmt.Sprintf("%s/%s/bid/%s", offer.TakerPays.Asset(), offer.TakerGets.Asset(), offer.Quality) // Arbitrarily call one side the bid

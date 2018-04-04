@@ -77,7 +77,6 @@ func accountsFromArgs(args []string) (map[string]*data.Account, error) {
 		for _, arg := range args {
 			account, _, ok := config.GetAccountByNickname(arg)
 			if !ok {
-				// log.Printf("nick %s, account %s", arg, account) // debug
 				var err error
 				account, err = data.NewAccountFromAddress(arg)
 				if err != nil {
