@@ -35,7 +35,7 @@ Sign command expects an encoded unsigned transaction via stdin, and encodes a si
 }
 
 func getSigningKey(tx data.Transaction) (util.Keypair, error) {
-	// Logic moved to cfg package.
+	// Config helper to read secrets from *.cfg files.
 	return config.GetAccountKeypair(tx.GetBase().Account)
 }
 

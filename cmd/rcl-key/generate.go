@@ -30,20 +30,22 @@ care.
 	fs := flag.NewFlagSet("generate", flag.ExitOnError)
 	fs.Int("n", 1, "Number of keypairs to generate.")
 	fs.String("vanity", "", "Optional regular expression to match.")
+	fs.String("nickname", "", "Give generated address a nickname.")
 
 	// TODO curve
 
-	s.ParseFlags(fs, args, help, "generate [-n=<int>] [-vanity=<regex>]")
+	s.ParseFlags(fs, args, help, "generate [-n=<int>] [-vanity=<regex>] [-nickname=<nick>]")
 
 	s.generateCommand(fs)
 
 }
 
 type key struct {
-	seed    data.Seed
-	keyType data.KeyType
-	seq     *uint32
-	account data.Account
+	seed     data.Seed
+	keyType  data.KeyType
+	seq      *uint32
+	account  data.Account
+	nickname string
 }
 
 func generate(keyType data.KeyType, seq *uint32) (key, error) {
@@ -90,6 +92,7 @@ func (s *State) generateCommand(fs *flag.FlagSet) {
 	log.SetPrefix(programName + " generate: ")
 
 	vanity := stringFlag(fs, "vanity")
+	nickname := stringFlag(fs, "nickname")
 
 	count := intFlag(fs, "n")
 	if count <= 0 {
@@ -152,6 +155,14 @@ func (s *State) generateCommand(fs *flag.FlagSet) {
 		select {
 		case key := <-matched:
 
+			if nickname != "" {
+				if count == 1 {
+					key.nickname = nickname
+				} else {
+					key.nickname = fmt.Sprintf("%s-%d", nickname, i+1)
+				}
+			}
+
 			// Save to disk before displaying the address
 			filename := fmt.Sprintf("rcl-key-%s.cfg", key.account)
 			err := key.save(filename)
@@ -187,6 +198,10 @@ func (key key) save(filename string) error {
 		sec.NewKey("sequence", fmt.Sprintf("%d", *key.seq))
 	} else {
 		log.Panicf("key type %s not yet supported", key.keyType)
+	}
+
+	if key.nickname != "" {
+		sec.NewKey("nickname", key.nickname)
 	}
 
 	// Create read-only file.
