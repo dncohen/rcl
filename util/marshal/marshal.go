@@ -25,7 +25,6 @@ func register() {
 
 // Returns io.EOF at end of input.
 func DecodeTransactions(in io.Reader, txs chan (data.Transaction)) error {
-	log.Println("decoding transactions...") // debug
 
 	// Register instances of what we accept.
 	register()
@@ -50,7 +49,6 @@ func DecodeTransactions(in io.Reader, txs chan (data.Transaction)) error {
 			return err
 		}
 		count++
-		log.Printf("marshal: decoded transaction #%d\n", count)
 		txs <- tx
 	}
 
@@ -69,7 +67,6 @@ func EncodeTransactions(out io.Writer, txs chan (data.Transaction)) error {
 	count := 0
 	for tx := range txs {
 		count++
-		log.Printf("marshal: encoding transaction #%d (%s)\n", count, tx.GetType())
 		err = gobEncoder.Encode(&tx) // Encode a *pointer* to the interface
 		if err != nil {
 			log.Println(err)
