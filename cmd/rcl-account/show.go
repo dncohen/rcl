@@ -155,6 +155,7 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 			accountResult.LedgerSequence,
 		)
 		table.Flush()
+		fmt.Println("") // blank line
 
 		table = tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.DiscardEmptyColumns)
 		fmt.Fprintln(table, "Balances\t Amount\t Currency/Issuer\t Min\t Max\t rippling\t quality\t")
@@ -169,6 +170,7 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 			//q.Q(line)
 		}
 		table.Flush()
+		fmt.Println("") // blank line
 	}
 
 	// Render all offers...
@@ -197,7 +199,7 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 
 	if len(byKey) > 0 {
 		table := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.DiscardEmptyColumns)
-		fmt.Fprintln(table, "Offers\t Sequence\t TakerGets\t TakerPays\t")
+		fmt.Fprintln(table, "Offers\t Sequence\t TakerGets\t TakerPays\t Price\t")
 
 		allKeys := make([]string, 0, len(byKey))
 		for k, _ := range byKey {
@@ -206,9 +208,11 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 		sort.Strings(allKeys)
 		for _, k := range allKeys {
 			v := byKey[k]
-			fmt.Fprintf(table, "%s\t %d\t %s\t %s\t\n", v.account, v.offer.Sequence, v.offer.TakerGets, v.offer.TakerPays)
+			price := v.offer.TakerPays.Ratio(v.offer.TakerGets)
+			fmt.Fprintf(table, "%s\t %d\t %s\t %s\t %s\n", v.account, v.offer.Sequence, v.offer.TakerGets, v.offer.TakerPays, price)
 		}
 		table.Flush()
+		fmt.Println("") // blank line
 	}
 
 }
