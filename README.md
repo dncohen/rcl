@@ -1,5 +1,55 @@
 # RCL Helper Libraries and Commands
 
+## Quick Start for First Timers
+
+Go get it:
+
+```
+go get -u github.com/dncohen/rcl/cmd/...
+```
+
+Set up a sandbox:
+
+```
+mkdir -p /tmp/rcl-altnet
+cd /tmp/rcl-altnet
+```
+
+Generate some test net XRP to play with:
+
+```
+curl -s -X POST https://faucet.altnet.rippletest.net/accounts | tee testnet-fund-account.json | python -m json.tool
+```
+
+Note the output has
+
+```
+    "address": "<ADDRESS>",
+    "secret": "<SECRET>"
+```
+
+Copy <ADDRESS> and <SECRET> and replace into the following...
+
+
+Configure `rcl` tools to use the altnet:
+
+```
+echo -e "rippled=wss://s.altnet.rippletest.net:51233" > altnet.cfg
+echo -e "[fund]\n\taddress=<ADDRESS>\n\tsecret=<SECRET>" >> altnet.cfg
+```
+
+(You've created an alias `fund` for the testnet account with 10000 XRP.)
+
+Use the `rcl-account` command to inspect your account:
+
+```
+rcl-account show fund
+```
+
+
+
+
+
 ## install and configure
 
 ```
