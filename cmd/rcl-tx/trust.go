@@ -1,20 +1,19 @@
 package main
 
 import (
-	"encoding/base64"
-	"encoding/gob"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 
 	"golang.org/x/sync/errgroup"
 
 	"github.com/dncohen/rcl/tx"
+	"github.com/dncohen/rcl/util/marshal"
 	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
 	"github.com/rubblelabs/ripple/websockets"
-	"github.com/y0ssar1an/q"
 )
 
 // Implements `trust` subcommand.  Create or modify a trust line.
@@ -31,8 +30,7 @@ Create or modify a trust line.
 
 	fs.Bool("ripple", false, "Allow rippling on account side of trustline.  Defaults to false which means disallow rippling.")
 	fs.Bool("authorize", false, "Authorize trustline.  Defaults to false which means make no change to current authorization.")
-	fs.String("encoding", "gob64", "Options are \"gob64\" (default, encoded as gob then base64), \"gob\", or \"json\".")
-	// TODO quality
+	// TODO quality, rippling
 	s.ParseFlags(fs, args, help, "trust <amount>")
 
 	s.trustCommand(fs)
@@ -45,7 +43,7 @@ func (s *State) trustCommand(fs *flag.FlagSet) {
 
 	// command line flags
 	allowRipple := boolFlag(fs, "ripple")
-	encodeFormat := stringFlag(fs, "encoding")
+	_ = allowRipple // TODO XXX
 
 	// command line args
 	args := fs.Args()
@@ -61,16 +59,9 @@ func (s *State) trustCommand(fs *flag.FlagSet) {
 	}
 
 	if asAccount == nil {
-		addr := config.GetAccount()
-		if addr == "" {
-			log.Println("No default account found in rcl.cfg.")
-			fail = true
-		}
-		asAccount, err = data.NewAccountFromAddress(addr)
-		if err != nil {
-			log.Printf("Bad address \"%s\": %s\n", addr, err)
-			fail = true
-		}
+		fail = true
+		fmt.Println("Use -as <address> flag to specify an account.")
+		usageAndExit(flag.CommandLine)
 	}
 
 	if fail {
@@ -103,7 +94,6 @@ func (s *State) trustCommand(fs *flag.FlagSet) {
 
 	var g errgroup.Group
 	var accountInfo *websockets.AccountInfoResult
-	var feeInfo *websockets.FeeResult
 
 	g.Go(func() error {
 		var err error
@@ -116,26 +106,31 @@ func (s *State) trustCommand(fs *flag.FlagSet) {
 	})
 
 	// not currently using...we could omit this.
-	g.Go(func() error {
-		var err error
-		feeInfo, err = remote.Fee()
-		if err != nil {
-			log.Printf("Failed to get fee: %s", err)
-			return err
-		}
-		return nil
-	})
-
+	/*
+		var feeInfo *websockets.FeeResult
+			g.Go(func() error {
+				var err error
+				feeInfo, err = remote.Fee()
+				if err != nil {
+					log.Printf("Failed to get fee: %s", err)
+					return err
+				}
+				return nil
+			})
+	*/
 	err = g.Wait()
 	if err != nil {
 		s.Exit(err)
 	}
 
-	q.Q(feeInfo)
-	q.Q(accountInfo)
+	// Prepare to encode transaction output.
+	txs := make(chan (data.Transaction))
+	g.Go(func() error {
+		return marshal.EncodeTransactions(os.Stdout, txs)
+	})
 
 	// Prepare a TrustSet transaction.
-	tx, err := tx.NewTrustSet(
+	t, err := tx.NewTrustSet(
 		tx.SetAddress(asAccount),
 		tx.SetSequence(*accountInfo.AccountData.Sequence),
 		tx.SetLastLedgerSequence(accountInfo.LedgerSequence+LedgerSequenceInterval),
@@ -143,47 +138,25 @@ func (s *State) trustCommand(fs *flag.FlagSet) {
 		tx.SetLimitAmount(*amount),
 		// TODO flags
 		// TODO qualityin, qualityout
+		tx.SetCanonicalSig(true),
 	)
 
 	// TODO: is it necessary to clean up the hash that rubblelabs puts into unsigned tx?
 	// "hash":"0000000000000000000000000000000000000000000000000000000000000000"
 
-	// GOBs are tricksy.
-	// Encode an instance of the interface, not the concrete type.
-	var encodeMe data.Transaction
-	encodeMe = tx
-	gob.Register(tx)
+	// Show in json format (debug)
+	j, _ := json.MarshalIndent(t, "", "\t")
+	log.Printf("Unsigned:\n%s\n", string(j))
+	// In case user in on a terminal, nice to have a clean line.
+	fmt.Fprintf(os.Stderr, "\n")
 
-	// Encode to stdout, log message have been going to stderr.
-	if encodeFormat == "gob64" {
+	// marshall the tx to stdout pipeline
+	txs <- t
+	close(txs)
 
-		// Show in json format (debug)
-		j, _ := json.MarshalIndent(tx, "", "\t")
-		log.Printf("Unsigned:\n%s\n", string(j))
-
-		// GOB is preferable as it preserves the type of the tx we've created.
-		// However it is not terminal safe.  So we further encode to base64.
-		b64Writer := base64.NewEncoder(base64.StdEncoding, os.Stdout)
-		defer b64Writer.Close()                           // Close() is important!!
-		err = gob.NewEncoder(b64Writer).Encode(&encodeMe) // Encode a *pointer* to the interface.
-
-	} else if encodeFormat == "gob" {
-		err = gob.NewEncoder(os.Stdout).Encode(tx)
-	} else if encodeFormat == "json" {
-		encoder := json.NewEncoder(os.Stdout)
-		err = encoder.Encode(tx)
-	} else {
-		log.Printf("Unexpected encoding: %s", encodeFormat)
-		s.ExitNow()
-	}
+	// Wait for all output to be encoded
+	err = g.Wait()
 	if err != nil {
 		s.Exit(err)
 	}
-
-	//time.Sleep(10 * time.Second) // test
-	log.Println("exiting.")
-	// TODO...
-	_ = allowRipple
-	_ = amount
-	_ = remote
 }
