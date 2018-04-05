@@ -29,7 +29,7 @@ Cancel an offer to sell one asset or issuance for another.
 `
 
 	fs := flag.NewFlagSet("sell", flag.ExitOnError)
-
+	fs.Bool("all", false, "Cancel all outstanding offers for an account.")
 	s.ParseFlags(fs, args, help, "cancel <sequence> [<sequence> ...]")
 
 	s.cancelCommand(fs)
@@ -38,11 +38,10 @@ Cancel an offer to sell one asset or issuance for another.
 func (s *State) cancelCommand(fs *flag.FlagSet) {
 	log.SetPrefix(programName + " cancel: ")
 
-	log.Println(fs.Args()) // debug
-
 	// command line args
+	all := boolFlag(fs, "all")
 	args := fs.Args()
-	if len(args) < 1 {
+	if !all && len(args) < 1 {
 		s.Exitf(intro)
 	}
 	fail := false
@@ -61,6 +60,7 @@ func (s *State) cancelCommand(fs *flag.FlagSet) {
 	}
 
 	// Honor -as command flag
+	/* now in main.go...
 	if asAccount == nil {
 		originatorAddress := config.GetAccount()
 		if originatorAddress == "" {
@@ -74,13 +74,16 @@ func (s *State) cancelCommand(fs *flag.FlagSet) {
 			fail = true
 		}
 	}
+	*/
+	if asAccount == nil {
+		fail = true
+		fmt.Println("Use -as <address> flag to specify an account.")
+		usageAndExit(flag.CommandLine)
+	}
 
 	if fail {
 		s.ExitNow()
 	}
-
-	// TODO confirm
-	log.Printf("Cancel %d offer(s) by %s...\n", len(seqs), asAccount)
 
 	rippled := config.GetRippled()
 	if rippled == "" {
@@ -95,6 +98,25 @@ func (s *State) cancelCommand(fs *flag.FlagSet) {
 	defer remote.Close()
 
 	log.Printf("Connected to %s\n", rippled) // debug
+
+	if all {
+		// Cancel all of an account's transactions.
+		result, err := remote.AccountOffers(*asAccount, "current")
+		if err != nil {
+			s.Exit(errors.Wrapf(err, "account_offers failed for %s: %s", asAccount))
+		}
+		for _, offer := range result.Offers {
+			seqs = append(seqs, offer.Sequence)
+		}
+	}
+
+	if len(seqs) < 1 {
+		log.Println("No offers - nothing to do.")
+		s.ExitNow()
+	}
+
+	// TODO confirm
+	log.Printf("Cancel %d offer(s) by %s...\n", len(seqs), asAccount)
 
 	// account_info returns ledger_current_index,
 	// which allows us to compute a LastLedgerSequence.
