@@ -129,12 +129,19 @@ func setup(fs *flag.FlagSet, args []string) (*State, []string, bool) {
 		os.Exit(2)
 	}
 
+	// Default -as <address> from configuration file.
+	if asAddress == nil || *asAddress == "" {
+		tmp := config.GetAccount()
+		asAddress = &tmp
+	}
+	// Honor -as <address> flag.
 	if asAddress != nil && *asAddress != "" {
 		asAccount, asTag, err = config.AccountFromArg(*asAddress)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(2)
 		}
+
 	}
 
 	if len(fs.Args()) < 1 {
