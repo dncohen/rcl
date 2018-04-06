@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/golang/glog"
 	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
 	"github.com/rubblelabs/ripple/terminal"
@@ -99,13 +100,14 @@ func (sub *Subscription) SubmitWait(t data.Transaction) (*websockets.TxResult, e
 		return nil, errors.Wrapf(err, "Failed to submit %s transaction.", t.GetType())
 	}
 
-	log.Printf("Tentative result of %s transaction by %s, %s: %s %s \n", t.GetType(), t.GetBase().Account, *hash, tentative.EngineResult, tentative.EngineResultMessage)
-	log.Printf("Waiting for final result of %s...\n", *hash)
+	if tentative.EngineResult.Success() {
+		glog.V(1).Infof("Tentative result of %s transaction by %s, %s: %s %s \n", t.GetType(), t.GetBase().Account, *hash, tentative.EngineResult, tentative.EngineResultMessage)
+	} else {
+		glog.Warningf("Tentative result of %s transaction by %s, %s: %s %s \n", t.GetType(), t.GetBase().Account, *hash, tentative.EngineResult, tentative.EngineResultMessage)
+	}
 
 	result := <-sub.AfterTx(*hash, ledgerBeforeSubmit, *lastLedger)
 
-	// verbose
-	//log.Printf("%s %s %s in ledger %d\n", result.MetaData.TransactionResult, result.Transaction.GetType(), *hash, result.LedgerSequence)
 	// TODO is it necessary to have timeout or handle disconnects, etc here?
 	return result, nil
 }
@@ -213,14 +215,14 @@ func (sub *Subscription) Loop() {
 		// Message loop should continue indefinitely.
 		sub.messageLoop()
 		// However if it gets disconnected, try to reconnect.
-		log.Println("Attempting reconnect...") // debug
+		glog.V(1).Infof("Attempting reconnect to %s...", sub.url) // verbose
 		err := sub.connect()
 		if err != nil {
-			log.Println(err)
-			// TODO wait with exponential backoff
+			glog.Errorln(err)
+			// TODO wait with incremental backoff
 			time.Sleep(10 * time.Second)
 		} else {
-			log.Println("...reconnected.") // debug
+			glog.V(1).Infof("Reconnected to %s.", sub.url) // verbose
 		}
 	}
 }
@@ -230,7 +232,7 @@ func (sub *Subscription) messageLoop() {
 	for {
 		msg, ok := <-sub.Remote.Incoming
 		if !ok {
-			log.Printf("End subscription message loop to %s\n", sub.url) // verbose
+			glog.V(3).Infof("End subscription message loop to %s\n", sub.url) // verbose
 			return
 		} else {
 		}
@@ -290,7 +292,7 @@ func (sub *Subscription) messageLoop() {
 
 										result, err := sub.Remote.Tx(listener.hash)
 										if err != nil {
-											log.Println(err)
+											glog.Errorln(err)
 											listener.r = nil // We will try again, next ledger event.
 										} else {
 											// Let the listener know only about validated transactions.
@@ -321,7 +323,7 @@ func (sub *Subscription) messageLoop() {
 			}
 			trades, err := data.NewTradeSlice(&msg.Transaction)
 			if err != nil {
-				log.Println(err)
+				glog.Errorln(err)
 			} else {
 				for _, trade := range trades {
 					terminal.Println(trade, terminal.DoubleIndent)
@@ -330,7 +332,7 @@ func (sub *Subscription) messageLoop() {
 
 			balances, err := msg.Transaction.Balances()
 			if err != nil {
-				log.Println(err)
+				glog.Errorln(err)
 			} else {
 				for _, balance := range balances {
 					terminal.Println(balance, terminal.DoubleIndent)
