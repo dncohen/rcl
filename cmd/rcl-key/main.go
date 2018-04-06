@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/dncohen/rcl/cfg"
+	"github.com/golang/glog"
 	"github.com/rubblelabs/ripple/data"
 
 	"upspin.io/shutdown"
@@ -203,6 +204,7 @@ func (s *State) init() {
 
 // ExitNow terminates the process with the current ExitCode.
 func (s *State) ExitNow() {
+	glog.Flush()
 	shutdown.Now(s.ExitCode)
 }
 
@@ -247,7 +249,7 @@ func (s *State) ParseFlags(fs *flag.FlagSet, args []string, help, usage string) 
 	}
 	if *helpFlag {
 		fs.Usage()
-		os.Exit(2)
+		s.ExitNow()
 	}
 }
 

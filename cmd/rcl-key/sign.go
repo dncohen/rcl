@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"fmt"
 	"io"
 	"log"
 	"os"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/dncohen/rcl/util"
 	"github.com/dncohen/rcl/util/marshal"
+	"github.com/golang/glog"
 	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
 )
@@ -73,20 +73,16 @@ func (s *State) signCommand(fs *flag.FlagSet) {
 		}
 	}()
 
-	// prepare to encode signed transactions to stdout
+	// encode signed transactions to stdout
 	var g errgroup.Group
 	signedTransactions := make(chan (data.Transaction))
 	g.Go(func() error {
 		return marshal.EncodeTransactions(os.Stdout, signedTransactions)
 	})
-	// Later, we will wait for g to complete.
 
+	// accept unsinged transactions from stdin
 	var err error
-	count := 0 // debug
 	for tx := range unsignedTransactions {
-		count++
-		log.Printf("decoded %d %s \n", count, tx.GetType()) // debug
-
 		if asAddress == "" {
 			keypair, err = getSigningKey(tx)
 			if err != nil {
@@ -96,7 +92,7 @@ func (s *State) signCommand(fs *flag.FlagSet) {
 
 		if tx.GetBase().Account.String() != keypair.Address {
 			// Could be regular key or multisign, so this is not always an error.
-			log.Printf("Transaction account %s differs from signing key %s.\n", tx.GetBase().Account, keypair.Address)
+			glog.Infof("Transaction %s account %s differs from signing key %s.\n", tx.GetType(), tx.GetBase().Account, keypair.Address)
 		}
 
 		// TODO show user tx details and prompt to continue.
@@ -106,22 +102,23 @@ func (s *State) signCommand(fs *flag.FlagSet) {
 		if err != nil {
 			s.Exit(errors.Wrapf(err, "failed to sign transaction"))
 		}
-		log.Printf("%s %s signed by %s.\n", tx.GetType(), tx.GetHash(), keypair.Address)
+		if glog.V(2) {
+			glog.Infof("%s %s signed by %s.\n", tx.GetType(), tx.GetHash(), keypair.Address)
 
-		// Show the signed tx in JSON format (verbose debug)
-		jb, err := json.MarshalIndent(tx, "", "\t")
-		if err != nil {
-			log.Println("Failed to encode signed transaction (json): ", err)
-			s.Exit(err)
-		} else {
-			log.Printf("Signed transaction JSON: \n%s", string(jb))
-			fmt.Fprintf(os.Stderr, "\n")
+			// Show the signed tx in JSON format (verbose debug)
+			jb, err := json.MarshalIndent(tx, "", "\t")
+			if err != nil {
+				glog.Errorln("Failed to JSON-encode signed transaction: ", err)
+			} else {
+				glog.Infof("Signed transaction JSON: \n%s\n", string(jb))
+			}
 		}
 
 		// Write to output
 		signedTransactions <- tx
 	}
 
+	// This close cannot be defered because encode goroutine will not complete.
 	close(signedTransactions)
 
 	// Wait for all output to be encoded.
