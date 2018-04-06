@@ -12,6 +12,7 @@ import (
 
 	"github.com/dncohen/rcl/util"
 	"github.com/dncohen/rcl/util/marshal"
+	"github.com/golang/glog"
 	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
 )
@@ -65,21 +66,21 @@ func (s *State) submitCommand(fs *flag.FlagSet) {
 
 	// errgroup in order to wait for results of all submitted tx.
 	var g errgroup.Group
-	count := 0 // debug
+
 	// Submit all transaction decoded
 	for tx := range signedTransactions {
-		count++
-		log.Printf("decoded %d %s \n", count, tx.GetType()) // debug
-		tx := tx                                            // scope (needed ?)
+		tx := tx // scope (needed ?)
 		// TODO? show user tx details and prompt to continue.
 
-		// Show the signed tx in JSON format. (verbose debug)
-		jb, err := json.MarshalIndent(tx, "", "\t")
-		if err != nil {
-			log.Println("Failed to encode signed transaction (json): ", err)
-			os.Exit(1)
+		if glog.V(3) {
+			// Show the signed tx in JSON format. (verbose debug)
+			jb, err := json.MarshalIndent(tx, "", "\t")
+			if err != nil {
+				glog.Errorln("Failed to encode signed transaction (json): ", err)
+			} else {
+				glog.Infof("Transaction JSON: \n%s\n", string(jb))
+			}
 		}
-		log.Printf("Transaction JSON: \n%s", string(jb))
 
 		g.Go(func() error {
 			tx := tx // Scope (needed?)
@@ -94,7 +95,13 @@ func (s *State) submitCommand(fs *flag.FlagSet) {
 				return fmt.Errorf("%s transaction %s tentative %s failed to validate!", tx.GetType(), tx.GetHash(), result.MetaData.TransactionResult)
 			} else {
 				// Show result of validated transaction.
-				log.Printf("%s %s (%s/%d) %s in ledger %d.\n", tx.GetType(), tx.GetHash(), tx.GetBase().Account, tx.GetBase().Sequence, result.MetaData.TransactionResult, result.LedgerSequence)
+				msg := fmt.Sprintf("%s %s (%s/%d) %s in ledger %d.\n", tx.GetType(), tx.GetHash(), tx.GetBase().Account, tx.GetBase().Sequence, result.MetaData.TransactionResult, result.LedgerSequence)
+				if result.MetaData.TransactionResult.Success() {
+					glog.Infof(msg)
+				} else {
+					glog.Errorf(msg)
+				}
+				fmt.Println(msg) // stdout
 			}
 
 			return err

@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"fmt"
 	"log"
 	"os"
 
@@ -11,6 +10,7 @@ import (
 
 	"github.com/dncohen/rcl/tx"
 	"github.com/dncohen/rcl/util/marshal"
+	"github.com/golang/glog"
 	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
 	"github.com/rubblelabs/ripple/websockets"
@@ -35,7 +35,7 @@ Send XRP or issuance.  This is a simple payment, meaning the source and destinat
 }
 
 func (s *State) sendCommand(fs *flag.FlagSet) {
-	log.SetPrefix(programName + " send:")
+	log.SetPrefix(programName + " send: ")
 
 	// command line args
 	args := fs.Args()
@@ -90,8 +90,6 @@ func (s *State) sendCommand(fs *flag.FlagSet) {
 	// TODO Want to close, but leads to "use of closed network connection" error.
 	//defer remote.Close()
 
-	log.Printf("Connected to %s\n", rippled) // debug
-
 	// Use an errgroup in case we eventually need multiple calls, i.e. to get fee information.
 	var g errgroup.Group
 	var accountInfo *websockets.AccountInfoResult
@@ -113,7 +111,7 @@ func (s *State) sendCommand(fs *flag.FlagSet) {
 	var sendMax *data.Amount
 	if !amount.IsNative() {
 		if amount.Issuer == zeroAccount {
-			log.Println("Replacing amount issuer.") // debug
+			glog.V(2).Infof("using %s as %s issuer", beneficiary, amount.Currency)
 			amount.Issuer = *beneficiary
 		}
 		sendMax = amount
@@ -136,9 +134,11 @@ func (s *State) sendCommand(fs *flag.FlagSet) {
 		tx.SetCanonicalSig(true),
 	)
 
-	// Show in json format (debug)
-	j, _ := json.MarshalIndent(tx, "", "\t")
-	log.Printf("Unsigned:\n%s\n", string(j))
+	if glog.V(1) {
+		// Show in json format (debug)
+		j, _ := json.MarshalIndent(tx, "", "\t")
+		glog.Infof("Unsigned:\n%s\n", string(j))
+	}
 
 	// Prepare to encode transaction output.
 	txs := make(chan (data.Transaction))
@@ -155,7 +155,5 @@ func (s *State) sendCommand(fs *flag.FlagSet) {
 		s.Exit(err)
 	}
 
-	// Newline after writing to stdout
-	fmt.Fprintln(os.Stderr, "")
-	log.Printf("Prepared unsigned %s from %s to %s.\n", tx.GetType(), tx.Account, tx.Destination)
+	glog.V(2).Infof("Prepared unsigned %s from %s to %s.\n", tx.GetType(), tx.Account, tx.Destination)
 }
