@@ -230,10 +230,16 @@ func (sub *Subscription) Loop() {
 func (sub *Subscription) messageLoop() {
 	// Consume messages as they arrive
 	for {
+		if sub.Remote == nil || sub.Remote.Incoming == nil {
+			// Not sure why this happens, can happen when machine wakes from sleep and connects to network.
+			glog.Errorf("Connection to remote %s is broken!", sub.url)
+			break
+		}
+
 		msg, ok := <-sub.Remote.Incoming
 		if !ok {
 			glog.V(3).Infof("End subscription message loop to %s\n", sub.url) // verbose
-			return
+			break
 		} else {
 		}
 
