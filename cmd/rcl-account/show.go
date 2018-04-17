@@ -71,7 +71,6 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 	linesResults := make(map[*data.Account]*websockets.AccountLinesResult)
 	accountResults := make(map[*data.Account]*websockets.AccountInfoResult)
 	offerResults := make(map[*data.Account]*websockets.AccountOffersResult)
-	txResults := make(map[*data.Account]*websockets.AccountTxResult)
 
 	g := new(errgroup.Group)
 
@@ -111,20 +110,6 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 				return nil
 			}
 		})
-
-		/*
-			g.Go(func() error {
-				result, err := remote.AccountTx(*acct)
-				if err != nil {
-					log.Printf("account_tx failed for %s: %s", acct, err)
-					return err
-				} else {
-					q.Q(result) // debug
-					txResults[acct] = result
-					return nil
-				}
-			})
-		*/
 	}
 	// Wait for all requests to complete
 	err = g.Wait()
@@ -140,18 +125,14 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 
 	for key, accountResult := range accountResults {
 		account := accountResult.AccountData.Account
-		lastActive := uint32(0)
-		if txResults[key] != nil && len(txResults[key].Transactions) > 0 {
-			lastActive = txResults[key].Transactions[0].LedgerSequence
-		}
+
 		table := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.Debug)
-		fmt.Fprintln(table, "Account\t XRP\t Sequence\tOwner Count\tLast Active\tLedger Index\t")
-		fmt.Fprintf(table, "%s\t %s\t %d\t %d\t %d\t%d\t\n",
+		fmt.Fprintln(table, "Account\t XRP\t Sequence\t Owner Count\t Ledger Index\t")
+		fmt.Fprintf(table, "%s\t %s\t %d\t %d\t %d\t\n",
 			account,
 			accountResult.AccountData.Balance,
 			*accountResult.AccountData.Sequence,
 			*accountResult.AccountData.OwnerCount,
-			lastActive,
 			accountResult.LedgerSequence,
 		)
 		table.Flush()
@@ -173,6 +154,86 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 		fmt.Println("") // blank line
 	}
 
+	// Render all books
+	type mappedOffer struct {
+		offer   data.AccountOffer
+		account data.Account
+	}
+	byBook := make(map[string][][]mappedOffer)
+	for _, account := range accounts {
+		if offerResults[account] == nil {
+			continue
+		}
+		book := ""
+		bidOrAsk := 0
+		for _, offer := range offerResults[account].Offers {
+			// Choose a base for this order book.
+			bookOption1 := fmt.Sprintf("%s / %s", offer.TakerPays.Asset(), offer.TakerGets.Asset())
+			bookOption2 := fmt.Sprintf("%s / %s", offer.TakerGets.Asset(), offer.TakerPays.Asset())
+
+			// Assume "XRP" will be last when sorting.  So XRP will be the base i.e. XRP/USD.
+			if strings.Compare(bookOption1, bookOption2) == -1 {
+				book = bookOption2
+				bidOrAsk = 1
+			} else {
+				book = bookOption1
+				bidOrAsk = 0
+			}
+
+			byType, ok := byBook[book]
+			if !ok {
+				bids := make([]mappedOffer, 0)
+				asks := make([]mappedOffer, 0)
+				byType = [][]mappedOffer{bids, asks}
+				byBook[book] = byType
+			}
+
+			byBook[book][bidOrAsk] = append(byType[bidOrAsk], mappedOffer{
+				offer:   offer,
+				account: *account,
+			})
+		}
+	}
+
+	for bookName, book := range byBook {
+		fmt.Println(bookName)
+
+		// sort offers by quality
+		for bidOrAsk, _ := range book {
+			sort.Slice(book[bidOrAsk], func(i, j int) bool {
+				return book[bidOrAsk][i].offer.Quality.Less(book[bidOrAsk][j].offer.Quality.Value)
+			})
+		}
+		table := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.DiscardEmptyColumns)
+		// TODO add currencies to header
+		fmt.Fprintln(table, "Bid by / Sequence\t TakerPays\t Price\t Price\t TakerGets\t Ask by / Sequence")
+		row := 0
+		for row < len(book[0]) || row < len(book[1]) {
+			if row < len(book[0]) {
+				offer := book[0][row]
+				price := offer.offer.TakerGets.Ratio(offer.offer.TakerPays)
+				fmt.Fprintf(table, "%s / %d\t %s\t %.4f\t", offer.account, offer.offer.Sequence, offer.offer.TakerPays, price.Float())
+			} else {
+				fmt.Fprintf(table, "n/a \t \t \t")
+			}
+
+			if row < len(book[1]) {
+				offer := book[1][row]
+				price := offer.offer.TakerPays.Ratio(offer.offer.TakerGets)
+				fmt.Fprintf(table, "%.4f\t %s\t %s / %d\t\n", price.Float(), offer.offer.TakerGets, offer.account, offer.offer.Sequence)
+			} else {
+				fmt.Fprintf(table, "\t \t n/a\t\n")
+			}
+			row++
+		}
+		table.Flush()
+		fmt.Println("") // blank line
+	}
+
+	// devel
+	if true {
+		return
+	}
 	// Render all offers...
 	// sort all offers into human-readable order
 	type mapped struct {

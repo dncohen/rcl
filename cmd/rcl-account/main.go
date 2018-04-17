@@ -64,8 +64,21 @@ var commands = map[string]func(*State, ...string){
 
 var config cfg.Config
 
+var (
+	// Values useful for RCL math.
+	zeroNative    *data.Value
+	zeroNonNative *data.Value
+	oneNative     *data.Value
+	oneNonNative  *data.Value
+)
+
 func init() {
 	rand.Seed(time.Now().UTC().UnixNano())
+
+	zeroNative, _ = data.NewNativeValue(0)
+	zeroNonNative, _ = data.NewNonNativeValue(0, 0)
+	oneNative, _ = data.NewNativeValue(1)
+	oneNonNative, _ = data.NewNonNativeValue(1, 0)
 }
 
 // Parse the list of accounts on the command line.

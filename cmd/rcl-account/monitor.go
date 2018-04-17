@@ -36,7 +36,7 @@ var (
 	accounts map[string]*data.Account
 )
 
-func accountsToMonitor(args []string) (map[string]*data.Account, error) {
+func accountsToMonitorXXX(args []string) (map[string]*data.Account, error) {
 	if len(args) > 0 {
 		accounts = make(map[string]*data.Account)
 
@@ -68,7 +68,7 @@ func (s *State) monitorCommand(fs *flag.FlagSet) {
 		s.Exitf("rippled websocket address not found in configuration file. Exiting.")
 	}
 
-	accounts, err := accountsToMonitor(fs.Args())
+	accounts, err := accountsFromArgs(fs.Args())
 	if err != nil {
 		s.Exit(err)
 	}
