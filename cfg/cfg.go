@@ -47,8 +47,8 @@ import (
 
 type Config struct {
 	*ini.File
-	// map nicknames to their configuration
-	accounts map[string]*ini.Section
+	accounts  map[string]*ini.Section // map nicknames to their configuration
+	nicknames map[data.Account]string // map account to their nickname
 }
 
 var (
@@ -84,26 +84,29 @@ func LooseLoad(source interface{}, others ...interface{}) (Config, error) {
 	}
 	// Create a mapping of nickname -> account.
 	config.accounts = make(map[string]*ini.Section)
+	config.nicknames = make(map[data.Account]string)
 	for _, section := range config.Sections() {
 		if section.HasKey("nickname") {
 			nickname := section.Key("nickname").String()
 			address := section.Name()
-			_, err := data.NewAccountFromAddress(address)
+			account, err := data.NewAccountFromAddress(address)
 			if err != nil {
 				log.Printf("Bad address %s in [%s]", address, section.Name())
 			} else {
 				//log.Printf("Nick: %s, Acct: %s", nickname, account) // debug
 				config.accounts[nickname] = section
 				config.accounts[nickname].NewKey("address", address)
+				config.nicknames[*account] = nickname
 			}
 		}
 		if section.HasKey("address") {
 			nickname := section.Name()
-			_, err := data.NewAccountFromAddress(section.Key("address").String())
+			account, err := data.NewAccountFromAddress(section.Key("address").String())
 			if err != nil {
 				log.Printf("Bad address [%s] with nickname \"%s\"\n", section.Key("address"), section.Name())
 			} else {
 				config.accounts[nickname] = section
+				config.nicknames[*account] = nickname
 			}
 		}
 	}
@@ -147,8 +150,13 @@ func (config Config) GetAccountByNickname(nickname string) (account *data.Accoun
 }
 
 func (config Config) GetAccountNickname(account data.Account) (string, bool) {
-	nick := config.Section(account.String()).Key("nickname").String()
-	return nick, nick != ""
+	//nick := config.Section(account.String()).Key("nickname").String()
+	//return nick, nick != ""
+	nick, ok := config.nicknames[account]
+	if !ok {
+		nick = account.String()
+	}
+	return nick, ok
 }
 
 // TODO support ECDSA and ed25519
