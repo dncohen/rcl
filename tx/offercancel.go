@@ -16,19 +16,36 @@ func NewOfferCancel(options ...func(data.Transaction) error) (*data.OfferCancel,
 	return tx, err
 }
 
-func SetOfferSequence(offerSeq uint32) func(data.Transaction) error {
+func SetOfferSequence(offerSeq interface{}) func(data.Transaction) error {
 	return func(tx data.Transaction) error {
+		var os uint32
+
+		// We accept uint32 or *uint32, ignore if nil.
+		switch offerSeq := offerSeq.(type) {
+		default:
+			return fmt.Errorf("Unexpected offer sequence type %T in SetOfferSequence", offerSeq)
+		case uint32:
+			os = offerSeq
+		case *uint32:
+			if offerSeq != nil {
+				os = *offerSeq
+			} else {
+				return nil
+			}
+		}
 
 		switch tx := tx.(type) {
 		default:
 			return fmt.Errorf("Unexpected transaction type %T in SetOfferSequence", tx)
 
 		case *data.OfferCancel:
-			tx.OfferSequence = offerSeq
+			tx.OfferSequence = os
+		case *data.OfferCreate:
+			tx.OfferSequence = &os // optional in OfferCreate
 		case *data.EscrowFinish:
-			tx.OfferSequence = offerSeq
+			tx.OfferSequence = os
 		case *data.EscrowCancel:
-			tx.OfferSequence = offerSeq
+			tx.OfferSequence = os
 		}
 		return nil
 	}
