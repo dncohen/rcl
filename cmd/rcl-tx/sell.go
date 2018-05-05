@@ -57,18 +57,10 @@ func (s *State) sellCommand(fs *flag.FlagSet) {
 		fail = true
 	}
 
-	// Honor -as command flag
+	// -as <account> is parsed in main.go
 	if asAccount == nil {
-		originatorAddress := config.GetAccount()
-		if originatorAddress == "" {
-			log.Println("No source account found in rcl.cfg.")
-			fail = true
-		}
-		asAccount, err = data.NewAccountFromAddress(originatorAddress)
-		if err != nil {
-			log.Printf("Bad originator address \"%s\": %s\n", originatorAddress, err)
-			fail = true
-		}
+		log.Println("Sell subcommand requires as account specified in configuration file or use `-as <account>` flag.")
+		fail = true
 	}
 
 	if fail {

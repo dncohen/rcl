@@ -118,8 +118,12 @@ func (config Config) GetRippled() string {
 	return config.Section("").Key("rippled").String()
 }
 
-func (config Config) GetAccount() string {
+func (config Config) GetAccountXXX() string { // deprecated, see GetDefaultAccount()
 	return config.Section("").Key("account").String()
+}
+
+func (config Config) GetDefaultAccount() (*data.Account, *uint32, bool) {
+	return config.GetAccountByNickname(config.Section("").Key("account").String())
 }
 
 func (config Config) GetAccountByNickname(nickname string) (account *data.Account, tag *uint32, ok bool) {

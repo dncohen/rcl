@@ -52,42 +52,35 @@ func (s *State) sendCommand(fs *flag.FlagSet) {
 	if len(args) != 2 {
 		usageAndExit(fs)
 	}
-	errs := false
+	fail := false
 
 	arg := 0
 	var tag *uint32
 	beneficiary, tag, err := config.AccountFromArg(args[arg])
 	if err != nil {
 		log.Printf("Expected beneficiary address, got \"%s\" (%s)\n", args[arg], err)
-		errs = true
+		fail = true
 	}
 	arg++
 	amount, err := config.AmountFromArg(args[arg])
 	if err != nil {
 		log.Printf("Expected amount, got \"%s\" (%s)\n", args[arg], err)
-		errs = true
+		fail = true
 	}
 
 	rippled := config.GetRippled()
 	if rippled == "" {
 		log.Println("No rippled URL found in rcl.cfg.")
-		errs = true
+		fail = true
 	}
 
+	// -as <account> is parsed in main.go
 	if asAccount == nil {
-		originatorAddress := config.GetAccount()
-		if originatorAddress == "" {
-			log.Println("No source account found in rcl.cfg.")
-			errs = true
-		}
-		asAccount, err = data.NewAccountFromAddress(originatorAddress)
-		if err != nil {
-			log.Printf("Bad originator address \"%s\": %s\n", originatorAddress, err)
-			errs = true
-		}
+		log.Println("Sell subcommand requires as account specified in configuration file or use `-as <account>` flag.")
+		fail = true
 	}
 
-	if errs {
+	if fail {
 		s.ExitNow()
 	}
 

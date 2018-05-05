@@ -130,11 +130,6 @@ func setup(fs *flag.FlagSet, args []string) (*State, []string, bool) {
 		os.Exit(2)
 	}
 
-	// Default -as <address> from configuration file.
-	if asAddress == nil || *asAddress == "" {
-		tmp := config.GetAccount()
-		asAddress = &tmp
-	}
 	// Honor -as <address> flag.
 	if asAddress != nil && *asAddress != "" {
 		asAccount, asTag, err = config.AccountFromArg(*asAddress)
@@ -142,7 +137,10 @@ func setup(fs *flag.FlagSet, args []string) (*State, []string, bool) {
 			fmt.Println(err)
 			os.Exit(2)
 		}
-
+	} else {
+		// Default -as <address> from configuration file.
+		asAccount, asTag, _ = config.GetDefaultAccount()
+		// Not all subcommands require asAccount, so we do not require it.
 	}
 
 	if len(fs.Args()) < 1 {
