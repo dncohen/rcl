@@ -206,13 +206,13 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 		}
 		table := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.DiscardEmptyColumns)
 		// TODO add currencies to header
-		fmt.Fprintln(table, "Bid by / Sequence\t TakerPays\t Price\t Price\t TakerGets\t Ask by / Sequence")
+		fmt.Fprintln(table, "Bid by (Sequence)\t TakerPays\t Price\t Price\t TakerGets\t Ask by (Sequence)")
 		row := 0
 		for row < len(book[0]) || row < len(book[1]) {
 			if row < len(book[0]) {
 				offer := book[0][row]
 				price := offer.offer.TakerGets.Ratio(offer.offer.TakerPays)
-				fmt.Fprintf(table, "%s / %d\t %s\t %.4f\t", offer.account, offer.offer.Sequence, offer.offer.TakerPays, price.Float())
+				fmt.Fprintf(table, "%s(%d)\t %s\t %.4f\t", offer.account, offer.offer.Sequence, offer.offer.TakerPays, price.Float())
 			} else {
 				fmt.Fprintf(table, "n/a \t \t \t")
 			}
@@ -220,7 +220,7 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 			if row < len(book[1]) {
 				offer := book[1][row]
 				price := offer.offer.TakerPays.Ratio(offer.offer.TakerGets)
-				fmt.Fprintf(table, "%.4f\t %s\t %s / %d\t\n", price.Float(), offer.offer.TakerGets, offer.account, offer.offer.Sequence)
+				fmt.Fprintf(table, "%.4f\t %s\t %s(%d)\t\n", price.Float(), offer.offer.TakerGets, offer.account, offer.offer.Sequence)
 			} else {
 				fmt.Fprintf(table, "\t \t n/a\t\n")
 			}
