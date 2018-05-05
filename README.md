@@ -104,6 +104,7 @@ rippled=wss://s1.ripple.com:51233
 # optional tag will be used when sending to this address, replace the example below wih your own!
 [bitstamp-usd]
 	address=rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B
+	# Put your destination tag below. Remove the "#", which starts a comment.
 	#tag=99999999
 
 [bitstamp-xrp]
