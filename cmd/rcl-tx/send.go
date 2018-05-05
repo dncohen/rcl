@@ -29,7 +29,7 @@ Send XRP or issuance.  This is a simple payment, meaning the source and destinat
 `
 
 	fs := flag.NewFlagSet("send", flag.ExitOnError)
-	// TODO flags
+	fs.String("sendmax", "", "Specify SendMax, allows cross-currency payment")
 	s.ParseFlags(fs, args, help, "send <beneficiary> <amount>")
 	s.sendCommand(fs)
 }
@@ -38,6 +38,16 @@ func (s *State) sendCommand(fs *flag.FlagSet) {
 	log.SetPrefix(programName + " send: ")
 
 	// command line args
+	var sendMax *data.Amount
+	sendmax := stringFlag(fs, "sendmax")
+	if sendmax != "" {
+		var err error
+		sendMax, err = data.NewAmount(sendmax)
+		if err != nil {
+			s.Exit(errors.Wrapf(err, "Bad sendmax %s", sendmax))
+		}
+	}
+
 	args := fs.Args()
 	if len(args) != 2 {
 		usageAndExit(fs)
@@ -108,13 +118,15 @@ func (s *State) sendCommand(fs *flag.FlagSet) {
 	}
 
 	// Ensure no ambiguity in amounts or issuers.
-	var sendMax *data.Amount
-	if !amount.IsNative() {
-		if amount.Issuer == zeroAccount {
-			glog.V(2).Infof("using %s as %s issuer", beneficiary, amount.Currency)
-			amount.Issuer = *beneficiary
-		}
+	if !amount.IsNative() && amount.Issuer == zeroAccount {
+		glog.V(2).Infof("using %s as %s issuer", beneficiary, amount.Currency)
+		amount.Issuer = *beneficiary
+	}
+	if sendMax == nil && !amount.IsNative() {
 		sendMax = amount
+	}
+	if !sendMax.IsNative() && sendMax.Issuer == zeroAccount {
+		sendMax.Issuer = *asAccount
 	}
 
 	tx, err := tx.NewPayment(
