@@ -5,7 +5,6 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
-	"github.com/y0ssar1an/q"
 )
 
 // Helpers to create rubblelabs data.Transaction
@@ -265,25 +264,6 @@ func SetCancelAfter(rippleTime uint32) func(data.Transaction) error {
 			tx.CancelAfter = &rippleTime
 
 		}
-		return nil
-	}
-}
-
-// TODO move to accountset.go
-func NewAccountSet(options ...func(data.Transaction) error) (*data.AccountSet, error) {
-	tx := &data.AccountSet{TxBase: data.TxBase{TransactionType: data.ACCOUNT_SET}}
-	err := Prepare(tx, options...)
-	return tx, err
-}
-
-func SetAccountFlag(flag uint32) func(data.Transaction) error {
-	return func(tx data.Transaction) error {
-		t, ok := tx.(*data.AccountSet)
-		if !ok {
-			q.Q(tx)
-			return errors.New("SetAccountFlag expected AccountSet transaction.")
-		}
-		t.SetFlag = &flag
 		return nil
 	}
 }
