@@ -60,16 +60,17 @@ const (
 )
 
 var commands = map[string]func(*State, ...string){
-	// Commenting these out for RC exercise.  Not relevant.
+	// Utilities that apply to all transaction types
 	"monitor": (*State).monitor,
 	"save":    (*State).save,
 	"submit":  (*State).submit,
 
-	// Transactions composers
+	// Transactions composers, specific to a transaction type
 	"cancel": (*State).cancel, // OfferCancel
 	"sell":   (*State).sell,   // OfferCreate
 	"send":   (*State).send,   // simple Payment
 	"trust":  (*State).trust,  // TrustSet
+	"set":    (*State).set,    // AccountSet
 }
 
 var (
