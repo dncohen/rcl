@@ -119,15 +119,29 @@ func AddMemo(value interface{}) func(data.Transaction) error {
 
 		switch v := value.(type) {
 		case []byte:
-			memoData = v
+			if len(v) == 0 {
+				return nil // No memo
+			} else {
+				memoData = v
+			}
 		case string:
 			memoData = []byte(v)
+		case *string:
+			if v == nil {
+				return nil // nil pointer means no memo
+			} else {
+				memoData = []byte(*v)
+			}
 		case data.Hash256:
 			memoData = v.Bytes()
 		case *data.Hash256:
-			memoData = v.Bytes()
+			if v == nil {
+				return nil // nil pointer means no memo
+			} else {
+				memoData = v.Bytes()
+			}
 		default:
-			return fmt.Errorf("AddMemo: Wrong type %+v", v)
+			return fmt.Errorf("Unexpected type %T (\"%+v\") passed to AddMemo.", v, v)
 		}
 
 		// This seems redundant to define this struct here, but I haven't
