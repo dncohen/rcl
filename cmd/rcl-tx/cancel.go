@@ -100,10 +100,10 @@ func (s *State) cancelCommand(fs *flag.FlagSet) {
 	log.Printf("Connected to %s\n", rippled) // debug
 
 	if all {
-		// Cancel all of an account's transactions.
+		// Cancel all of an account's outstanding offers.
 		result, err := remote.AccountOffers(*asAccount, "current")
 		if err != nil {
-			s.Exit(errors.Wrapf(err, "account_offers failed for %s: %s", asAccount))
+			s.Exit(errors.Wrapf(err, "account_offers failed for %s", asAccount))
 		}
 		for _, offer := range result.Offers {
 			seqs = append(seqs, offer.Sequence)
