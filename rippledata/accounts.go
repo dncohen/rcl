@@ -13,8 +13,8 @@ import (
 type AccountData struct {
 	Account        data.Account
 	Parent         data.Account
-	InitialBalance data.Value `json:"initial_balance"`
-	LedgerIndex    uint32     `json:"ledger_index"`
+	InitialBalance data.NonNativeValue `json:"initial_balance,string"` // TODO what type to use here?? (data.Value interprets "200" as drops, not XRP)
+	LedgerIndex    uint32              `json:"ledger_index"`
 	Inception      time.Time
 	TxHash         data.Hash256 `json:"tx_hash"`
 }
