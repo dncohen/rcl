@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
 )
 
@@ -74,11 +75,23 @@ func (this Client) GetBalanceChangesAsync(account data.Account) chan BalanceChan
 	go func() {
 		done := false
 		marker := ""
+		consecutiveErrors := 0
 		for !done {
 			//log.Printf("BalanceChangesAsync: Requesting balance changes for %s with marker %s", account, marker) // debug
 			response, err := this.GetBalanceChanges(account, marker)
 			if err != nil {
-				log.Panic(err)
+				consecutiveErrors++
+				if consecutiveErrors >= 100 {
+					log.Panic(errors.Wrapf(err, "rippledata: failed to get balances changes, %d attempt(s)", consecutiveErrors))
+				}
+				<-time.After(time.Second * time.Duration(consecutiveErrors)) // Wait before trying again.
+				log.Println(errors.Wrapf(err, "rippledata: failed to get balances changes, %d attempt(s)", consecutiveErrors))
+				continue // try again
+			} else {
+				if consecutiveErrors > 0 {
+					log.Printf("rippledata: success after %d earlier failed attempts\n", consecutiveErrors)
+				}
+				consecutiveErrors = 0
 			}
 			for _, change := range response.BalanceChanges {
 				c <- change

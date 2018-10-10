@@ -2,14 +2,13 @@ package rippledata
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"path"
+	"time"
 
 	"github.com/pkg/errors"
-	"github.com/y0ssar1an/q"
 )
 
 // https://ripple.com/build/data-api-v2
@@ -52,7 +51,26 @@ func (this Client) Endpoint(segment ...string) *url.URL {
 	return endpoint
 }
 
+var getError = errors.New("GET failed")
+
+// Retry requests, because ripple data has trouble, pretty often.
 func (this Client) Get(response DataResponse, endpoint *url.URL, values *url.Values) error {
+	count := 0
+	for {
+		count++
+		err := this.get(response, endpoint, values)
+		if err != nil && errors.Cause(err) == getError {
+			if count > 10 {
+				return errors.Wrapf(err, "rippledata GET failed (%d attempts)", count)
+			}
+			<-time.After(time.Duration(count) * time.Second) // wait between attempts
+		} else {
+			return err
+		}
+	}
+}
+
+func (this Client) get(response DataResponse, endpoint *url.URL, values *url.Values) error {
 	if values != nil {
 		endpoint.RawQuery = values.Encode()
 	}
@@ -69,7 +87,7 @@ func (this Client) Get(response DataResponse, endpoint *url.URL, values *url.Val
 	err = json.NewDecoder(res.Body).Decode(&raw)
 	if err != nil {
 		err = errors.Wrapf(err, "GET %s could not decode response", endpoint)
-		q.Q(err, string(raw)) // debug
+		//q.Q(err, string(raw)) // debug
 	}
 
 	// Now get the result from the raw
@@ -77,8 +95,8 @@ func (this Client) Get(response DataResponse, endpoint *url.URL, values *url.Val
 
 	err = json.Unmarshal(raw, response)
 	if err == nil && response.GetResult() != "success" {
-		err = fmt.Errorf("GET %s returned %s: %s", endpoint.String(), response.GetResult(), response.GetMessage())
-		q.Q(err, string(raw)) // debug
+		err = errors.Wrapf(getError, "GET %s returned %s: %s", endpoint.String(), response.GetResult(), response.GetMessage())
+		//q.Q(err, string(raw)) // debug
 	}
 
 	return err
