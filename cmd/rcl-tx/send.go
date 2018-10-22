@@ -112,13 +112,13 @@ func (s *State) sendCommand(fs *flag.FlagSet) {
 
 	// Ensure no ambiguity in amounts or issuers.
 	if !amount.IsNative() && amount.Issuer == zeroAccount {
-		glog.V(2).Infof("using %s as %s issuer", beneficiary, amount.Currency)
+		glog.V(1).Infof("using %s as %s issuer", beneficiary, amount.Currency)
 		amount.Issuer = *beneficiary
 	}
-	if sendMax == nil && !amount.IsNative() {
+	if sendMax == nil && !amount.IsNative() { // No sendmax on XRP payments
 		sendMax = amount
 	}
-	if !sendMax.IsNative() && sendMax.Issuer == zeroAccount {
+	if sendMax != nil && !sendMax.IsNative() && sendMax.Issuer == zeroAccount {
 		sendMax.Issuer = *asAccount
 	}
 
