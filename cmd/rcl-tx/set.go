@@ -84,7 +84,6 @@ func (s *State) setCommand(fs *flag.FlagSet) {
 			fail = true
 		}
 	}
-	log.Println(memohex) // debug
 
 	if asAccount == nil {
 		fail = true

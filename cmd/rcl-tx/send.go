@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"log"
@@ -30,6 +31,13 @@ Send XRP or issuance.  This is a simple payment, meaning the source and destinat
 
 	fs := flag.NewFlagSet("send", flag.ExitOnError)
 	fs.String("sendmax", "", "Specify SendMax, allows cross-currency payment")
+
+	// Memo fields allowed on any transaction. So this logic should be
+	// moved to main.go or somewhere else common to each rcl-tx
+	// subcommand.  Also TODO, support multiple memos per transaction.
+	fs.String("memo", "", "A memo string, to be hex encoded and written to ledger with the transaction.")
+	fs.String("memohex", "", "A memo string, already hex encoded, to be written to ledger with the transaction.")
+
 	s.ParseFlags(fs, args, help, "send <beneficiary> <amount>")
 	s.sendCommand(fs)
 }
@@ -37,6 +45,7 @@ Send XRP or issuance.  This is a simple payment, meaning the source and destinat
 func (s *State) sendCommand(fs *flag.FlagSet) {
 	log.SetPrefix(programName + " send: ")
 
+	fail := false
 	// command line args
 	var sendMax *data.Amount
 	sendmax := stringFlag(fs, "sendmax")
@@ -48,11 +57,28 @@ func (s *State) sendCommand(fs *flag.FlagSet) {
 		}
 	}
 
+	memoFlag := stringFlag(fs, "memo")
+	var memo *string
+	if memoFlag != "" {
+		memo = &memoFlag
+	}
+
+	memohexFlag := stringFlag(fs, "memohex")
+	memohexBytes := []byte(memohexFlag)
+	var memohex []byte
+	if memohexFlag != "" {
+		memohex = make([]byte, hex.DecodedLen(len(memohexBytes)))
+		_, err := hex.Decode(memohex, memohexBytes)
+		if err != nil {
+			log.Printf("Failed to decode hex memo (\"%s\")\n", memohexFlag)
+			fail = true
+		}
+	}
+
 	args := fs.Args()
 	if len(args) != 2 {
 		usageAndExit(fs)
 	}
-	fail := false
 
 	arg := 0
 	var tag *uint32
@@ -127,7 +153,9 @@ func (s *State) sendCommand(fs *flag.FlagSet) {
 		tx.SetSourceTag(asTag),
 		tx.SetSequence(*accountInfo.AccountData.Sequence),
 		tx.SetLastLedgerSequence(accountInfo.LedgerSequence+LedgerSequenceInterval),
-		tx.SetFee(12), // TODO
+		tx.SetFee(12),    // TODO
+		tx.AddMemo(memo), // TODO support multiple memo fields
+		tx.AddMemo(memohex),
 
 		// Simple payment, source and destination currency the same.
 		tx.SetAmount(amount),
