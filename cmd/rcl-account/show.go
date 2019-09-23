@@ -34,7 +34,7 @@ Show current settings and balances for accounts on the Ripple Consensus Ledger.
 func (s *State) showCommand(fs *flag.FlagSet) {
 	log.SetPrefix(programName + " show: ")
 
-	rippled := config.Section("").Key("rippled").String()
+	rippled := config.Section("").Key("rippled").MustString("wss://s1.ripple.com:51233")
 	if rippled == "" {
 		s.Exitf("rippled websocket address not found in configuration file. Exiting.")
 	}
