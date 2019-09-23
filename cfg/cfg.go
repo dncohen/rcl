@@ -59,10 +59,10 @@ var (
 func LooseLoadGlob(pattern string) (Config, error) {
 	configFilenames, err := filepath.Glob(pattern)
 	if err != nil {
-		return Config{}, FileNotFound
+		return Config{File: ini.Empty()}, FileNotFound
 	}
 	if len(configFilenames) == 0 {
-		return Config{}, FileNotFound
+		return Config{File: ini.Empty()}, FileNotFound
 	}
 	// https://golang.org/doc/faq#convert_slice_of_interface
 	configs := make([]interface{}, len(configFilenames))
