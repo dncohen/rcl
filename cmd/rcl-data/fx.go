@@ -39,6 +39,8 @@ func init() {
 }
 
 func fxMain() error {
+	cfg, _ := command.Config()
+
 	dataAPI := cfg.Section("").Key("rippledata").MustString("https://data.ripple.com/v2/") // trailing slash needed
 	baseAsset := cfg.Section("").Key("base").MustString("USD/rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B")
 
