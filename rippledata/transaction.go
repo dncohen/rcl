@@ -7,9 +7,26 @@ import (
 	"github.com/rubblelabs/ripple/data"
 )
 
-// Common fields in data responses that identify transactions.  I.e. payments, exchanges and balance changes
+type GetTransactionResponse struct {
+	Response
+	Transaction struct {
+		LedgerIndex uint32                       `json:"ledger_index"`
+		Date        time.Time                    `json:"date"`
+		Hash        data.Hash256                 `json:"hash"`
+		Tx          data.TransactionWithMetaData `json:"tx"` // actually doesn't have metadata :(
+		Meta        data.MetaData                `json:"meta"`
+	}
+}
 
-type TransactionResponse struct {
+func (this Client) Transaction(hash data.Hash256) (*GetTransactionResponse, error) {
+	endpoint := this.Endpoint("transactions", hash.String())
+	response := &GetTransactionResponse{}
+	err := this.Get(response, endpoint, nil)
+	return response, err
+}
+
+// Common fields in data responses that identify transactions.  I.e. payments, exchanges and balance changes
+type TransactionResponse struct { // TODO(dnc): TransactionResponse is a bad name for what this is (does not embed Response)
 	TxHash       data.Hash256 `json:"tx_hash"`
 	LedgerIndex  uint32       `json:"ledger_index"`
 	ExecutedTime time.Time    `json:"executed_time"`
