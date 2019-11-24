@@ -38,10 +38,13 @@ func init() {
 }
 
 func ledgerMain() error {
+	cfg, _ := command.Config()
+	defaultAsset := cfg.Section("").Key("base").MustString("USD/rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B") // rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B is bitstamp
 
 	// define flags
 	feeFlag := command.OperationFlagSet.Bool("fee", false, "include transaction fees")
 	nFlag := command.OperationFlagSet.Int("n", 0, "how many transactions to inspect (for debugging); use 0 for all")
+	baseFlag := command.OperationFlagSet.String("base", defaultAsset, "query for price relative to base")
 
 	// parse flags
 	err := command.OperationFlagSet.Parse(command.Args()[1:])
@@ -61,9 +64,11 @@ func ledgerMain() error {
 		namedAccount[formatAccount(a)] = &tmp
 	}
 
-	// TODO make base asset configurable
-	base, err := data.NewAmount("1.0/USD/rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B") // rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B is bitstamp
-	command.Check(err)
+	var base *data.Asset
+	if *baseFlag != "" {
+		base, err = data.NewAsset(*baseFlag)
+		command.Check(err)
+	}
 
 	// TODO(dnc): make data API url configurable
 	dataAPI := "https://data.ripple.com/v2/" // trailing slash needed.
@@ -109,11 +114,55 @@ func ledgerMain() error {
 			command.Infof("aborting after %d transactions (-n flag)", count-1)
 			break
 		}
+
+		// Before the transaction, show historical prices of the currencies involved.
+		// TODO(dnc): concurrency for better performance
+		// TODO(dnc): should we throttle price queries, i.e. one/day or maybe one/hour?
+		if base != nil {
+			priceShown := make(map[data.Currency]bool) // query normalized rate at most once per currency per tx
+			for _, e := range event {
+				switch t := e.Transaction.(type) {
+				case rippledata.BalanceChangeDescriptor:
+					amount := t.GetChangeAmount()
+					if t.ChangeType == "transaction_cost" && !*feeFlag {
+						// skipping fee splits
+						continue
+					}
+					if amount.Currency.String() == base.Currency {
+						// nothing to show
+						continue
+					}
+					shown, _ := priceShown[amount.Currency]
+					if shown {
+						continue
+					}
+					normalized, err := dataClient.Normalize(*amount, *base, e.GetExecutedTime())
+					if err != nil {
+						command.Error("failed to normalize price of %s on %s", amount, e.GetExecutedTime().Format("2006/01/02 15:04:05"))
+						fmt.Printf("; FIXME: failed to normalize price of %s on %s\n", amount, e.GetExecutedTime().Format("2006/01/02 15:04:05"))
+						continue
+					}
+
+					fmt.Printf("; Normalized value of %s %s is %s %s on %s\n", normalized.Amount, amount.Currency, normalized.Converted, base.Currency, e.GetExecutedTime().Format("2006/01/02 15:04:05"))
+					// https://www.ledger-cli.org/3.0/doc/ledger3.html#Commodity-price-histories
+					fmt.Printf("P %s %s %s %s\n",
+						e.GetExecutedTime().Format("2006/01/02 15:04:05"),
+						amount.Currency,
+						normalized.Rate, base.Currency,
+					)
+					priceShown[amount.Currency] = true // once per transaction
+				}
+			}
+		}
+
+		// Render the transaction in ledger-cli format.  First a "payee" line, then a "split" for each balance change.
 		// note, iterator may return one or more events per transaction
 		txDate := event[0].GetExecutedTime().Format("2006-01-02")
 		txHash := event[0].GetHash()
 		command.V(2).Infof("transaction (%q) has %d events", txHash, len(event))
 
+		// Query data api for the transaction responsible for balance changes.
+		// This allows us to learn additional details (i.e. the sender of a payment we received)
 		tx, err := dataClient.Transaction(txHash)
 		if err != nil {
 			command.Error(err)
