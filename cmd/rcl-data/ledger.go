@@ -32,20 +32,24 @@ func init() {
 	command.RegisterOperation(command.Operation{
 		Handler:     ledgerMain,
 		Name:        "ledger",
-		Syntax:      "ledger <account> [...]",
+		Syntax:      "ledger [-fee=true] <account> [...]",
 		Description: `Operation "ledger" writes historical activity in ledger-cli format.`,
 	})
 }
 
 func ledgerMain() error {
 
+	// define flags
+	feeFlag := command.OperationFlagSet.Bool("fee", false, "include transaction fees")
 	nFlag := command.OperationFlagSet.Int("n", 0, "how many transactions to inspect (for debugging); use 0 for all")
 
+	// parse flags
 	err := command.OperationFlagSet.Parse(command.Args()[1:])
 	if err != nil {
 		return err
 	}
 
+	// validate flags
 	if len(command.OperationFlagSet.Args()) == 0 {
 		return errors.New("Expected <account> parameter.")
 	}
@@ -67,6 +71,19 @@ func ledgerMain() error {
 	command.Check(err)
 
 	command.V(1).Infof("Inspecting %d account(s) via %q", len(account), dataAPI)
+
+	// helper, comments out fee splits
+	splitPrefix := func(changeType string) string {
+		switch changeType {
+		case "transaction_cost":
+			if !*feeFlag {
+				return "; "
+			} else {
+				return ""
+			}
+		}
+		return ""
+	}
 
 	// Iterate over balance changes for each account
 	var event []*history.AccountTx
@@ -119,6 +136,7 @@ func ledgerMain() error {
 			fmt.Printf("\n; %T %s (%s)\n", t, formatAccount(t.GetBase().Account), txMeta.TransactionResult)
 		}
 		// new ledger-cli transaction starts payee line
+
 		fmt.Printf("%s %s %s (%s)\n", txDate, tx.Transaction.Tx.GetType(), txHash, txMeta.TransactionResult) // payee
 
 		// track which accounts are shown in splits
@@ -129,14 +147,15 @@ func ledgerMain() error {
 			case rippledata.BalanceChangeDescriptor:
 				amount := t.GetChangeAmount()
 				//counterparty := formatAccount(t.Counterparty)
-				fmt.Fprintf(writer, "\tAsset:Crypto:RCL:%s\t%s %s\t; %s\n", formatAccount(*e.Account), amount.Value, amount.Currency, t.ChangeType) // split
+				fmt.Fprintf(writer, "\t%sAssets:Crypto:RCL:%s\t%s %s\t; %s\n", splitPrefix(t.ChangeType), formatAccount(*e.Account), amount.Value, amount.Currency, t.ChangeType) // split
 				shown[*e.Account] = true
 
 				if t.ChangeType == "transaction_cost" {
 					// add split for fees
-					fmt.Fprintf(writer, "\tExpense:Crypto:RCL:fee\t%s %s\t; %s\n", amount.Value.Negate(), amount.Currency, t.ChangeType)
+					fmt.Fprintf(writer, "\t%sExpenses:Crypto:RCL:fee\t%s %s\t; %s\n", splitPrefix(t.ChangeType), amount.Value.Negate(), amount.Currency, t.ChangeType)
 				}
 			default:
+				fmt.Fprintf(writer, "\tFIXME (rcl-data: unexpected change type %T)\n", t)
 				command.Errorf("Unexpected event type (%T)", t)
 			}
 		}
