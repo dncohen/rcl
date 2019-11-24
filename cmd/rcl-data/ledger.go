@@ -19,7 +19,9 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/dncohen/rcl/rippledata"
@@ -106,21 +108,58 @@ func ledgerMain() error {
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 4, ' ', 0)
 
 	// prepare to loop over all past transactions
-	count := 0
+	txCount := 0
 
 	for event = iterator.Next(); event != nil; event = iterator.Next() {
-		count++
-		if *nFlag > 0 && count > *nFlag {
-			command.Infof("aborting after %d transactions (-n flag)", count-1)
+		txCount++
+		if *nFlag > 0 && txCount > *nFlag {
+			command.Infof("exiting after %d transactions (-n flag)", txCount-1)
 			break
+		}
+
+		byType := make(map[string][]int) // track events; key is fully-qualified type, value is index
+
+		// first pass; inspect balance changes, attempt to determine cost basis
+		for i, e := range event {
+			// array, because a single tx could result in multiple exchanges
+			byType[uniformChangeType(e)] = append(byType[uniformChangeType(e)], i)
+		}
+		// track offsetting costs
+		cost := make([]string, len(event)) // ledger-cli cost (or price) is "@@ 10 USD" (or "@ 1 USD"), for example
+		for i, e := range event {
+			switch t := e.Transaction.(type) {
+			case rippledata.BalanceChangeDescriptor:
+				amount := t.GetChangeAmount()
+				if !amount.IsNegative() && !amount.IsZero() { // if positive
+					// a credit to our account, see if we have an offsetting debit
+					key := invertedChangeType(e)
+					offsetting, _ := byType[key]
+					if len(offsetting) == 1 && amount.Currency.String() != base.Currency {
+						offset := event[offsetting[0]].Transaction.(rippledata.BalanceChangeDescriptor).GetChangeAmount()
+						if offset.Currency != amount.Currency {
+							// The cost of the credit, learned from offsetting debit
+							cost[i] = fmt.Sprintf("@@ %s %s", offset.Negate().Value, offset.Currency)
+							cost[offsetting[0]] = " "
+						} else {
+							// same currency, a move from one wallet to another, no price needed
+							cost[i] = " " // not "", a bit of a hack.
+							cost[offsetting[0]] = " "
+						}
+					}
+				}
+			}
 		}
 
 		// Before the transaction, show historical prices of the currencies involved.
 		// TODO(dnc): concurrency for better performance
 		// TODO(dnc): should we throttle price queries, i.e. one/day or maybe one/hour?
 		if base != nil {
-			priceShown := make(map[data.Currency]bool) // query normalized rate at most once per currency per tx
-			for _, e := range event {
+			normalized := make(map[data.Currency]*rippledata.NormalizeResponse) // query normalized rate at most once per currency per tx
+			for i, e := range event {
+				if cost[i] != "" {
+					// already know cost
+					continue
+				}
 				switch t := e.Transaction.(type) {
 				case rippledata.BalanceChangeDescriptor:
 					amount := t.GetChangeAmount()
@@ -128,29 +167,36 @@ func ledgerMain() error {
 						// skipping fee splits
 						continue
 					}
+					if amount.IsZero() || amount.IsNegative() {
+						continue
+					}
 					if amount.Currency.String() == base.Currency {
 						// nothing to show
 						continue
 					}
-					shown, _ := priceShown[amount.Currency]
-					if shown {
+					n, ok := normalized[amount.Currency]
+					if ok {
+						// we already have a rate for this currency
+						cost[i] = fmt.Sprintf("@ %s %s", n.Rate, base.Currency)
 						continue
 					}
-					normalized, err := dataClient.Normalize(*amount, *base, e.GetExecutedTime())
+
+					normalized[amount.Currency], err = dataClient.Normalize(*amount, *base, e.GetExecutedTime())
 					if err != nil {
 						command.Error("failed to normalize price of %s on %s", amount, e.GetExecutedTime().Format("2006/01/02 15:04:05"))
 						fmt.Printf("; FIXME: failed to normalize price of %s on %s\n", amount, e.GetExecutedTime().Format("2006/01/02 15:04:05"))
 						continue
 					}
 
-					fmt.Printf("; Normalized value of %s %s is %s %s on %s\n", normalized.Amount, amount.Currency, normalized.Converted, base.Currency, e.GetExecutedTime().Format("2006/01/02 15:04:05"))
+					fmt.Printf("; Normalized value of %s %s is %s %s on %s\n", normalized[amount.Currency].Amount, amount.Currency, normalized[amount.Currency].Converted, base.Currency, e.GetExecutedTime().Format("2006/01/02 15:04:05"))
 					// https://www.ledger-cli.org/3.0/doc/ledger3.html#Commodity-price-histories
 					fmt.Printf("P %s %s %s %s\n",
 						e.GetExecutedTime().Format("2006/01/02 15:04:05"),
 						amount.Currency,
-						normalized.Rate, base.Currency,
+						normalized[amount.Currency].Rate, base.Currency,
 					)
-					priceShown[amount.Currency] = true // once per transaction
+					// TODO(dnc): better to use cost ("@@") or price ("@") here?
+					cost[i] = fmt.Sprintf("@ %s %s", normalized[amount.Currency].Rate, base.Currency)
 				}
 			}
 		}
@@ -191,17 +237,29 @@ func ledgerMain() error {
 		// track which accounts are shown in splits
 		shown := make(map[data.Account]bool)
 
-		for _, e := range event {
+		// If any affected account is shown in a split, we should show
+		// them all.  For example, if we receive a payment, we should show
+		// a split for the sender, to keep double-entry accounting
+		// correct.  However, we might show a balance change from an
+		// exchange that is part of a payment, in which case we don't need
+		// to show sender or receiver.
+		affectedShown := false
+
+		for i, e := range event {
 			switch t := e.Transaction.(type) {
 			case rippledata.BalanceChangeDescriptor:
 				amount := t.GetChangeAmount()
 				//counterparty := formatAccount(t.Counterparty)
-				fmt.Fprintf(writer, "\t%sAssets:Crypto:RCL:%s\t%s %s\t; %s\n", splitPrefix(t.ChangeType), formatAccount(*e.Account), amount.Value, amount.Currency, t.ChangeType) // split
+				fmt.Fprintf(writer, "\t%sAssets:Crypto:RCL:%s\t%s %s\t%s\t; %s\n", splitPrefix(t.ChangeType), formatAccount(*e.Account), amount.Value, amount.Currency, cost[i], t.ChangeType) // split
 				shown[*e.Account] = true
+				_, ok := affected[*e.Account]
+				if ok {
+					affectedShown = true
+				}
 
 				if t.ChangeType == "transaction_cost" {
 					// add split for fees
-					fmt.Fprintf(writer, "\t%sExpenses:Crypto:RCL:fee\t%s %s\t; %s\n", splitPrefix(t.ChangeType), amount.Value.Negate(), amount.Currency, t.ChangeType)
+					fmt.Fprintf(writer, "\t%sExpenses:Crypto:RCL:fee\t%s %s\t\t; %s\n", splitPrefix(t.ChangeType), amount.Value.Negate(), amount.Currency, t.ChangeType)
 				}
 			default:
 				fmt.Fprintf(writer, "\tFIXME (rcl-data: unexpected change type %T)\n", t)
@@ -209,21 +267,63 @@ func ledgerMain() error {
 			}
 		}
 
-		// when an account is known to be affected, but not shown, add a blank split which human may be able to better classify
+		// when an account is known to be affected, but not already shown
+		// in a split, add a blank split which human may be able to better
+		// classify
 		for a, comment := range affected {
 			isShown, _ := shown[a]
 			if !isShown {
-				fmt.Fprintf(writer, "\tFIXME:Crypto:RCL:%s\t \t; %s\n", formatAccount(a), comment)
+				if !affectedShown {
+					// commend this line out
+					fmt.Fprintf(writer, "\t; ")
+				} else {
+					// not commented out
+					fmt.Fprintf(writer, "\t")
+				}
+				fmt.Fprintf(writer, "FIXME:Crypto:RCL:%s\t \t\t; %s\n", formatAccount(a), comment)
 				shown[a] = true
 			}
 		}
 
 		writer.Flush()
 		fmt.Println()
-		_ = txDate
+
 	}
 
-	_ = account
-	_ = base
 	return nil
+}
+
+// helper when matching offsetting changes
+// returns one of "payment debit", "payment credit", "exchange debit", "exchange credit"
+func uniformChangeType(event *history.AccountTx) string {
+	switch t := event.Transaction.(type) {
+	case rippledata.BalanceChangeDescriptor:
+		amount := t.GetChangeAmount()
+		key := t.ChangeType
+		switch key {
+		case "payment_source", "payment_destination":
+			key = "payment"
+		case "exchange", "intermediary":
+			// include account in exchange, because sometimes multiple accounts can exchange during a single tx
+			key = fmt.Sprintf("exchange %s", event.Account)
+		}
+
+		if amount.IsNegative() {
+			key = key + " debit"
+		} else {
+			key = key + " credit"
+		}
+		return key
+	default:
+		log.Panicf("unexpected account history event type (%T)", t)
+	}
+	return "" // should not be reached
+}
+func invertedChangeType(event *history.AccountTx) string {
+	key := uniformChangeType(event)
+	if strings.HasSuffix(key, "debit") {
+		return strings.Replace(key, "debit", "credit", 1)
+	} else {
+		return strings.Replace(key, "credit", "debit", 1)
+	}
 }
