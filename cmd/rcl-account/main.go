@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/dncohen/rcl/cfg"
-	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
 
 	"upspin.io/shutdown"
@@ -93,7 +92,7 @@ func accountsFromArgs(args []string) (map[string]*data.Account, error) {
 				var err error
 				account, err = data.NewAccountFromAddress(arg)
 				if err != nil {
-					return accounts, errors.Wrapf(err, "Bad account address: %s", arg)
+					return accounts, fmt.Errorf("Bad account address (%q): %w", arg, err)
 				}
 			}
 			accounts[arg] = account
