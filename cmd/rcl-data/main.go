@@ -41,6 +41,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
@@ -81,8 +82,25 @@ func main() {
 
 }
 
-var accountByNickname map[string]data.Account
-var nicknameByAccount map[data.Account]string // would nicknameByAddress be more useful?
+type AccountTag struct {
+	Account data.Account
+	Tag     *uint32
+}
+
+func (this *AccountTag) String() string {
+	if this == nil {
+		log.Panic("nil AccountTag passed to AccountTag.String()")
+	}
+	if this.Tag == nil || *(this.Tag) == 0 {
+		return this.Account.String()
+	} else {
+		return fmt.Sprintf("%s.%d", this.Account, *(this.Tag))
+	}
+}
+
+var accountByNickname map[string]AccountTag
+
+var nicknameByAccount map[AccountTag]string // would nicknameByAddress be more useful?
 
 func initializeNicknames() error {
 	// once
@@ -90,8 +108,8 @@ func initializeNicknames() error {
 		return nil
 	}
 
-	accountByNickname = make(map[string]data.Account)
-	nicknameByAccount = make(map[data.Account]string)
+	accountByNickname = make(map[string]AccountTag)
+	nicknameByAccount = make(map[AccountTag]string)
 
 	cfg, err := command.Config()
 	if err != nil {
@@ -102,22 +120,59 @@ func initializeNicknames() error {
 		if section.HasKey("address") {
 			nickname := section.Name()
 			address := section.Key("address").Value()
+
+			var tag *uint32
+			if section.HasKey("tag") {
+				t, err := section.Key("tag").Uint()
+				if err != nil {
+					return fmt.Errorf("failed to parse RCL configuration %q: %w", section.Name(), err)
+				}
+				tmp := uint32(t)
+				tag = &tmp
+			}
+
 			account, err := data.NewAccountFromAddress(address)
 			if err != nil {
 				return err
 			}
-			accountByNickname[nickname] = *account
-			nicknameByAccount[*account] = nickname
+			at := AccountTag{*account, tag}
+			//log.Printf("account nickname %q: %v", nickname, at) // troubleshooting
+			accountByNickname[nickname] = at
+			nicknameByAccount[at] = nickname
 		}
 	}
 
 	return nil
 }
 
+// avoid scientific notation, not understood by ledger-cli
+func formatValue(v data.Value) string {
+	// unfortunately rubblelabs does not export data.Value:isScientific,
+	// so we must manipulate strings
+	str := v.String()
+	if strings.Index(str, "e") != -1 {
+		// simply using fmt.Sprintf("%f", v.Float()) produces, for example "0.000000"
+
+		rat := v.Rat()
+		// debug
+		log.Printf("formatValue: converting scientific notation from %q to %q", v.String(), rat.FloatString(16))
+		str = fmt.Sprintf("%s", rat.FloatString(16)) // TODO(dnc): proper decimal precision?
+	}
+	return str
+}
+
 // returns account nickname if known; otherwise, address string
-func formatAccount(account data.Account) string {
-	nick, ok := nicknameByAccount[account]
+func formatAccount(account data.Account, tag *uint32) string {
+	at := AccountTag{account, tag}
+	nick, ok := nicknameByAccount[at]
+	if !ok && at.Tag != nil {
+		// fallback to nickname without tag
+		at.Tag = nil
+		nick, ok = nicknameByAccount[at]
+	}
 	if !ok {
+		//log.Printf("no account nickname for %v", at) // troubleshooting
+		// no nickname for this account
 		return account.String()
 	}
 	return nick
@@ -126,13 +181,14 @@ func formatAccount(account data.Account) string {
 // Helper for operations that expect a list of accounts.  We want to
 // accept (and display) accounts by local nickname, as well as normal
 // ripple address.
-func parseAccountArg(arg []string) ([]data.Account, error) {
+func parseAccountArg(arg []string) ([]AccountTag, error) {
 	err := initializeNicknames()
 	if err != nil {
 		return nil, err
 	}
 
-	var account []data.Account
+	var account []AccountTag
+
 	for _, a := range arg {
 		acct, ok := accountByNickname[a]
 		if !ok {
@@ -140,7 +196,7 @@ func parseAccountArg(arg []string) ([]data.Account, error) {
 			if err != nil {
 				return account, fmt.Errorf("bad address (%q): %w", a, err)
 			}
-			acct = *tmp
+			acct = AccountTag{*tmp, nil}
 		}
 		account = append(account, acct)
 	}

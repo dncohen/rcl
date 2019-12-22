@@ -60,10 +60,9 @@ func ledgerMain() error {
 	}
 	account, err := parseAccountArg(command.OperationFlagSet.Args())
 	command.Check(err)
-	namedAccount := make(map[string]*data.Account) // our balance change iterator needs this
+	namedAccount := make(map[string]*data.Account) // our balance change iterator needs this TODO(dnc) still needed?
 	for _, a := range account {
-		tmp := a
-		namedAccount[formatAccount(a)] = &tmp
+		namedAccount[a.String()] = &a.Account
 	}
 
 	var base *data.Asset
@@ -100,7 +99,7 @@ func ledgerMain() error {
 
 	if command.V(1) {
 		for nick, data := range iterator.AccountData {
-			command.Infof("%s created by %s at %s", nick, formatAccount(data.Parent), data.Inception)
+			command.Infof("%s created by %s at %s", nick, formatAccount(data.Parent, nil), data.Inception)
 		}
 	}
 
@@ -217,18 +216,21 @@ func ledgerMain() error {
 		txMeta := tx.Transaction.Meta
 
 		// track accounts known to be affected by the transaction
+		// balance change events omit tags, so we track only account without tag
 		affected := make(map[data.Account]string)
+		//XXXsource := AccountTag{Account: tx.Transaction.Tx.GetBase().Account, Tag: tx.Transaction.Tx.GetBase().SourceTag}
 		affected[tx.Transaction.Tx.GetBase().Account] = "tx source"
 
 		// type-specific comment preceeding transaction
 		switch t := tx.Transaction.Tx.Transaction.(type) { // naming is hard
 		case *data.Payment:
-			fmt.Printf("\n; Payment %s -> %s (%s, delivered %s)\n", formatAccount(t.Account), formatAccount(t.Destination), txMeta.TransactionResult, txMeta.DeliveredAmount)
+			fmt.Printf("\n; Payment source tag %v; destination tag %v", t.SourceTag, t.DestinationTag) // debug
+			fmt.Printf("\n; Payment %s -> %s (%s, delivered %s)\n", formatAccount(t.Account, t.SourceTag), formatAccount(t.Destination, t.DestinationTag), txMeta.TransactionResult, txMeta.DeliveredAmount)
 			if txMeta.TransactionResult == 0 { // unfortunately tesSUCCESS not exported by rubblelabs
 				affected[t.Destination] = "payment_destination"
 			}
 		default:
-			fmt.Printf("\n; %T %s (%s)\n", t, formatAccount(t.GetBase().Account), txMeta.TransactionResult)
+			fmt.Printf("\n; %T %s (%s)\n", t, formatAccount(t.GetBase().Account, nil), txMeta.TransactionResult)
 		}
 		// new ledger-cli transaction starts payee line
 
@@ -250,7 +252,7 @@ func ledgerMain() error {
 			case rippledata.BalanceChangeDescriptor:
 				amount := t.GetChangeAmount()
 				//counterparty := formatAccount(t.Counterparty)
-				fmt.Fprintf(writer, "\t%sAssets:Crypto:RCL:%s\t%s %s\t%s\t; %s\n", splitPrefix(t.ChangeType), formatAccount(*e.Account), amount.Value, amount.Currency, cost[i], t.ChangeType) // split
+				fmt.Fprintf(writer, "\t%sAssets:Crypto:RCL:%s\t%s %s\t%s\t; %s %s\n", splitPrefix(t.ChangeType), formatAccount(*e.Account, nil), formatValue(*amount.Value), amount.Currency, cost[i], t.ChangeType, amount) // split
 				shown[*e.Account] = true
 				_, ok := affected[*e.Account]
 				if ok {
@@ -280,7 +282,7 @@ func ledgerMain() error {
 					// not commented out
 					fmt.Fprintf(writer, "\t")
 				}
-				fmt.Fprintf(writer, "FIXME:Crypto:RCL:%s\t \t\t; %s\n", formatAccount(a), comment)
+				fmt.Fprintf(writer, "FIXME:Crypto:RCL:%s\t \t\t; %s\n", formatAccount(a, nil), comment)
 				shown[a] = true
 			}
 		}
