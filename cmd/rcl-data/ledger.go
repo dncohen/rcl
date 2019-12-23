@@ -61,8 +61,8 @@ func ledgerMain() error {
 	account, err := parseAccountArg(command.OperationFlagSet.Args())
 	command.Check(err)
 	namedAccount := make(map[string]*data.Account) // our balance change iterator needs this TODO(dnc) still needed?
-	for _, a := range account {
-		namedAccount[a.String()] = &a.Account
+	for i, arg := range command.OperationFlagSet.Args() {
+		namedAccount[arg] = &(account[i].Account)
 	}
 
 	var base *data.Asset
@@ -99,6 +99,7 @@ func ledgerMain() error {
 
 	if command.V(1) {
 		for nick, data := range iterator.AccountData {
+			// TODO(dnc): is nick actually a nickname, or is it the full address?
 			command.Infof("%s created by %s at %s", nick, formatAccount(data.Parent, nil), data.Inception)
 		}
 	}
@@ -216,18 +217,17 @@ func ledgerMain() error {
 		txMeta := tx.Transaction.Meta
 
 		// track accounts known to be affected by the transaction
-		// balance change events omit tags, so we track only account without tag
-		affected := make(map[data.Account]string)
-		//XXXsource := AccountTag{Account: tx.Transaction.Tx.GetBase().Account, Tag: tx.Transaction.Tx.GetBase().SourceTag}
-		affected[tx.Transaction.Tx.GetBase().Account] = "tx source"
+		// balance change events omit tags, so value here is formatted account name, and comment
+		affected := make(map[data.Account][2]string)
+		source := NewAccountTag(tx.Transaction.Tx.GetBase().Account, tx.Transaction.Tx.GetBase().SourceTag)
+		affected[source.Account] = [2]string{formatAccount(source.Account, &source.Tag), "tx source"}
 
 		// type-specific comment preceeding transaction
 		switch t := tx.Transaction.Tx.Transaction.(type) { // naming is hard
 		case *data.Payment:
-			fmt.Printf("\n; Payment source tag %v; destination tag %v", t.SourceTag, t.DestinationTag) // debug
 			fmt.Printf("\n; Payment %s -> %s (%s, delivered %s)\n", formatAccount(t.Account, t.SourceTag), formatAccount(t.Destination, t.DestinationTag), txMeta.TransactionResult, txMeta.DeliveredAmount)
 			if txMeta.TransactionResult == 0 { // unfortunately tesSUCCESS not exported by rubblelabs
-				affected[t.Destination] = "payment_destination"
+				affected[t.Destination] = [2]string{formatAccount(t.Destination, t.DestinationTag), "payment_destination"}
 			}
 		default:
 			fmt.Printf("\n; %T %s (%s)\n", t, formatAccount(t.GetBase().Account, nil), txMeta.TransactionResult)
@@ -272,7 +272,7 @@ func ledgerMain() error {
 		// when an account is known to be affected, but not already shown
 		// in a split, add a blank split which human may be able to better
 		// classify
-		for a, comment := range affected {
+		for a, accountComment := range affected {
 			isShown, _ := shown[a]
 			if !isShown {
 				if !affectedShown {
@@ -282,7 +282,7 @@ func ledgerMain() error {
 					// not commented out
 					fmt.Fprintf(writer, "\t")
 				}
-				fmt.Fprintf(writer, "FIXME:Crypto:RCL:%s\t \t\t; %s\n", formatAccount(a, nil), comment)
+				fmt.Fprintf(writer, "FIXME:Crypto:RCL:%s\t \t\t; %s\n", accountComment[0], accountComment[1])
 				shown[a] = true
 			}
 		}

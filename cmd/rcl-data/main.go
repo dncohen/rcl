@@ -82,19 +82,29 @@ func main() {
 
 }
 
+// AccountTag is a "fully qualified" account identifier, meaning an
+// address and destination (or source) tag.
 type AccountTag struct {
 	Account data.Account
-	Tag     *uint32
+	Tag     uint32 // not *uint32, because we want to use AccountTag as map key
+}
+
+func NewAccountTag(acct data.Account, tag *uint32) AccountTag {
+	this := AccountTag{Account: acct}
+	if tag != nil {
+		this.Tag = *tag
+	}
+	return this
 }
 
 func (this *AccountTag) String() string {
 	if this == nil {
 		log.Panic("nil AccountTag passed to AccountTag.String()")
 	}
-	if this.Tag == nil || *(this.Tag) == 0 {
+	if this.Tag == 0 { // treat 0 as no tag
 		return this.Account.String()
 	} else {
-		return fmt.Sprintf("%s.%d", this.Account, *(this.Tag))
+		return fmt.Sprintf("%s.%d", this.Account, this.Tag)
 	}
 }
 
@@ -135,7 +145,7 @@ func initializeNicknames() error {
 			if err != nil {
 				return err
 			}
-			at := AccountTag{*account, tag}
+			at := NewAccountTag(*account, tag)
 			//log.Printf("account nickname %q: %v", nickname, at) // troubleshooting
 			accountByNickname[nickname] = at
 			nicknameByAccount[at] = nickname
@@ -155,7 +165,7 @@ func formatValue(v data.Value) string {
 
 		rat := v.Rat()
 		// debug
-		log.Printf("formatValue: converting scientific notation from %q to %q", v.String(), rat.FloatString(16))
+		command.V(1).Infof("formatValue: converting scientific notation from %q to %q", v.String(), rat.FloatString(16))
 		str = fmt.Sprintf("%s", rat.FloatString(16)) // TODO(dnc): proper decimal precision?
 	}
 	return str
@@ -163,11 +173,11 @@ func formatValue(v data.Value) string {
 
 // returns account nickname if known; otherwise, address string
 func formatAccount(account data.Account, tag *uint32) string {
-	at := AccountTag{account, tag}
+	at := NewAccountTag(account, tag)
 	nick, ok := nicknameByAccount[at]
-	if !ok && at.Tag != nil {
+	if !ok && at.Tag != 0 {
 		// fallback to nickname without tag
-		at.Tag = nil
+		at.Tag = 0
 		nick, ok = nicknameByAccount[at]
 	}
 	if !ok {
@@ -196,9 +206,10 @@ func parseAccountArg(arg []string) ([]AccountTag, error) {
 			if err != nil {
 				return account, fmt.Errorf("bad address (%q): %w", a, err)
 			}
-			acct = AccountTag{*tmp, nil}
+			acct = NewAccountTag(*tmp, nil)
 		}
 		account = append(account, acct)
 	}
+
 	return account, err
 }
