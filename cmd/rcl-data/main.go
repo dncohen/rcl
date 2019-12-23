@@ -149,6 +149,14 @@ func initializeNicknames() error {
 			//log.Printf("account nickname %q: %v", nickname, at) // troubleshooting
 			accountByNickname[nickname] = at
 			nicknameByAccount[at] = nickname
+			if at.Tag != 0 {
+				// use nickname even when tag is not used
+				noTag := NewAccountTag(*account, nil)
+				_, ok := nicknameByAccount[noTag]
+				if !ok {
+					nicknameByAccount[noTag] = nickname
+				}
+			}
 		}
 	}
 
