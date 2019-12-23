@@ -126,7 +126,7 @@ func (this Client) Normalize(amount data.Amount, normalizeTo data.Asset, when ti
 	endpoint := this.Endpoint("normalize")
 	values := endpoint.Query()
 
-	values.Set("amount", amount.Value.String())
+	values.Set("amount", amount.Value.Abs().String())
 	values.Set("currency", amount.Currency.String())
 	if amount.Currency.String() != "XRP" {
 		values.Set("issuer", amount.Issuer.String())
