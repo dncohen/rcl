@@ -99,7 +99,6 @@ func ledgerMain() error {
 
 	if command.V(1) {
 		for nick, data := range iterator.AccountData {
-			// TODO(dnc): is nick actually a nickname, or is it the full address?
 			command.Infof("%s created by %s at %s", nick, formatAccount(data.Parent, nil), data.Inception)
 		}
 	}
@@ -157,7 +156,9 @@ func ledgerMain() error {
 			normalized := make(map[data.Currency]*rippledata.NormalizeResponse) // query normalized rate at most once per currency per tx
 			for i, e := range event {
 				if cost[i] != "" {
-					// already know cost
+					// cost may have been set (above) when transferring from one
+					// wallet to another (of ours), we don't want to treat as
+					// gain or basis.
 					continue
 				}
 				switch t := e.Transaction.(type) {
@@ -167,7 +168,7 @@ func ledgerMain() error {
 						// skipping fee splits
 						continue
 					}
-					if amount.IsZero() || amount.IsNegative() {
+					if amount.IsZero() {
 						continue
 					}
 					if amount.Currency.String() == base.Currency {
@@ -195,8 +196,13 @@ func ledgerMain() error {
 						amount.Currency,
 						normalized[amount.Currency].Rate, base.Currency,
 					)
+					comment := ""
+					if !amount.IsNegative() {
+						// comment out cost, as we don't necessarily realize gains on transfers TODO(dnc): correct here?
+						//comment = "; "
+					}
 					// TODO(dnc): better to use cost ("@@") or price ("@") here?
-					cost[i] = fmt.Sprintf("@ %s %s", normalized[amount.Currency].Rate, base.Currency)
+					cost[i] = fmt.Sprintf("%s@ %s %s", comment, normalized[amount.Currency].Rate, base.Currency)
 				}
 			}
 		}
@@ -252,7 +258,12 @@ func ledgerMain() error {
 			case rippledata.BalanceChangeDescriptor:
 				amount := t.GetChangeAmount()
 				//counterparty := formatAccount(t.Counterparty)
-				fmt.Fprintf(writer, "\t%sAssets:Crypto:RCL:%s\t%s %s\t%s\t; %s %s\n", splitPrefix(t.ChangeType), formatAccount(*e.Account, nil), formatValue(*amount.Value), amount.Currency, cost[i], t.ChangeType, amount) // split
+				fmt.Fprintf(writer, "\t%sAssets:Crypto:RCL:%s\t%s %s\t%s\t; %s", splitPrefix(t.ChangeType), formatAccount(*e.Account, nil), formatValue(*amount.Value), amount.Currency, cost[i], t.ChangeType) // ledger-cli split
+				if !amount.IsNative() {
+					fmt.Fprintf(writer, " %s", (amount)) // append original amount, before formatValue
+				}
+				fmt.Fprintf(writer, "\n") // newline
+
 				shown[*e.Account] = true
 				_, ok := affected[*e.Account]
 				if ok {
