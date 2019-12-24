@@ -190,13 +190,12 @@ func accountDetail(account data.Account, tag *uint32) (nick, ledger string) {
 	at := NewAccountTag(account, tag)
 	cfg, ok := accountConfig[at]
 	if !ok && tag != nil {
-		log.Println("no nickname for:", at)
 		// fallback to nickname without tag
 		at.Tag = 0
 		cfg, ok = accountConfig[at]
 	}
 	if !ok {
-		log.Printf("no account nickname for %v in %v", at, accountConfig) // troubleshooting
+		//log.Printf("no account nickname for %v in %v", at, accountConfig) // troubleshooting
 		// no nickname for this account
 		return account.String(), ""
 	}

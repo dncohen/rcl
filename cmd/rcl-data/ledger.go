@@ -131,6 +131,16 @@ type LedgerTransaction struct {
 	meta *data.MetaData
 }
 
+func (this *LedgerTransaction) sanity() { // troubleshoot
+	for i, _ := range this.Split {
+		x, ok := this.offset[i]
+		if ok && x == i {
+			log.Println(this.offset)
+			log.Panic("offset of self!", i)
+		}
+	}
+}
+
 func NewLedgerTransaction(event []*history.AccountTx) *LedgerTransaction {
 	this := &LedgerTransaction{
 		Split:  make([]*LedgerSplit, len(event)),
@@ -175,16 +185,37 @@ func (this *LedgerTransaction) SetTransaction(tx *rippledata.GetTransactionRespo
 	this.meta = &tx.Transaction.Meta
 	this.Payee = fmt.Sprintf("%s %s (%s)", tx.Transaction.Tx.GetType(), this.Payee, this.meta.TransactionResult)
 
-	//this.source = NewAccountTag(this.GetBase().Source, this.GetBase().SourceTag)
-	this.affects(this.GetBase().Account, this.GetBase().SourceTag, "tx_source")
-
 	// type-specific comment preceeding transaction
 	switch t := tx.Transaction.Tx.Transaction.(type) { // naming is hard
 	case *data.Payment:
 		this.Comment = fmt.Sprintf("Payment %s -> %s (%s, delivered %s)", formatAccount(t.Account, t.SourceTag), formatAccount(t.Destination, t.DestinationTag), this.meta.TransactionResult, this.meta.DeliveredAmount)
-		if this.meta.TransactionResult == 0 { // unfortunately tesSUCCESS not exported by rubblelabs
-			this.affects(t.Destination, t.DestinationTag, "payment_destination")
+
+		// if events are only "exchange", we don't need to add splits for source or destination
+
+		// if an event already for destination, add the source
+		i, ok := this.byType["payment credit"]
+		if ok {
+			srcSplit := this.affects(this.GetBase().Account, this.GetBase().SourceTag, "tx_source")
+			if srcSplit != nil {
+				//log.Printf("added srcSplit, splits now %d; byType: %v; offset: %v", len(this.Split), this.byType, this.offset)
+				this.offset[len(this.Split)-1] = i[0]
+				this.offset[i[0]] = len(this.Split) - 1
+			}
 		}
+		this.sanity()
+
+		i, ok = this.byType["payment debit"]
+		if ok {
+			if this.meta.TransactionResult == 0 { // unfortunately tesSUCCESS not exported by rubblelabs
+				dstSplit := this.affects(t.Destination, t.DestinationTag, "payment_destination") // TODO(dnc): revisit these type names
+				if dstSplit != nil {
+					this.offset[len(this.Split)-1] = i[0]
+					this.offset[i[0]] = len(this.Split) - 1
+				}
+			}
+		}
+		this.sanity()
+
 	default:
 		this.Comment = fmt.Sprintf("%T %s (%s)", t, formatAccount(t.GetBase().Account, nil), this.meta.TransactionResult)
 	}
@@ -193,6 +224,10 @@ func (this *LedgerTransaction) SetTransaction(tx *rippledata.GetTransactionRespo
 func (this *LedgerTransaction) affects(account data.Account, tag *uint32, reason string) *LedgerSplit {
 	// If account is included in events, no additional action required.
 	for _, s := range this.Split {
+		if s.event == nil {
+			// here, indicates we are adding multiple synthetic splits; probably a bug
+			continue
+		}
 		if *s.event.Account == account {
 			return nil
 		}
@@ -205,10 +240,13 @@ func (this *LedgerTransaction) affects(account data.Account, tag *uint32, reason
 		Comment: reason,
 	}
 	if ledgerAccount == "" {
+		// ledger-cli name not found in config, make one up
 		split.Name = "FIXME:Crypto:RCL:" + nick
 	}
 
 	this.Split = append(this.Split, split)
+	this.byType[reason] = append(this.byType[reason], len(this.Split)-1)
+
 	return split
 }
 
@@ -282,17 +320,34 @@ func (this *LedgerTransaction) RenderHead(w io.Writer) {
 }
 
 func (this *LedgerTransaction) RenderSplit(w io.Writer) {
-	for _, s := range this.Split {
+	for i, s := range this.Split {
 		amount := s.GetChangeAmount()
 		prefix := ""
 		if s.suppress {
 			prefix = ";"
 		}
+
+		// suppress cost when Asset to Asset
+		cost := s.Cost
+		if cost != "" {
+			offset, ok := this.offset[i]
+			if ok && offset == i {
+				log.Panic("offset of self!", i) // troubleshoot
+			}
+			if ok && this.Split[offset].Amount == nil || this.Split[offset].Amount.Currency == s.Amount.Currency {
+				prefix := strings.SplitN(s.Name, ":", 1)
+				prefix2 := strings.SplitN(this.Split[offset].Name, ":", 1)
+				if prefix[0] == prefix2[0] {
+					log.Printf("omitting cost %q because shared asset class (%q vs %q)", cost, s.Name, this.Split[offset].Name)
+					cost = ""
+				}
+			}
+		}
 		if amount != nil {
-			fmt.Fprintf(w, "\t%s%s\t%s %s\t%s\t; %s", prefix, s.Name, formatValue(*amount.Value), amount.Currency, s.Cost, s.Comment)
+			fmt.Fprintf(w, "\t%s%s\t%s %s\t%s\t; %s", prefix, s.Name, formatValue(*amount.Value), amount.Currency, cost, s.Comment)
 		} else {
 			// blank split to be balanced by ledger-cli
-			fmt.Fprintf(w, "\t%s%s\t   \t   \t; %s", prefix, s.Name, s.Comment)
+			fmt.Fprintf(w, "\t%s%s\t   \t%s\t; %s", prefix, s.Name, cost, s.Comment)
 		}
 		fmt.Fprintf(w, "\n")
 	}
@@ -421,12 +476,13 @@ func ledgerMain() error {
 		txCount++
 		if *nFlag > 0 && txCount > *nFlag {
 			command.Infof("exiting after %d transactions (-n flag)", txCount-1)
-			fmt.Printf("; rcl-data ledger: exit after %d transactions (-n=%d flag )", txCount-1, *nFlag)
+			fmt.Printf("; rcl-data ledger: exit after %d transactions (-n=%d flag )\n", txCount-1, *nFlag)
 			break
 		}
 
 		// build ledger-cli transaction, where each ripple-data "event" is a "split"
 		ledgerTx := NewLedgerTransaction(event)
+		ledgerTx.sanity()
 
 		if !*feeFlag {
 			ledgerTx.Suppress("transaction_cost")
@@ -444,6 +500,7 @@ func ledgerMain() error {
 				command.Error(err)
 			}
 			ledgerTx.SetTransaction(tx)
+			ledgerTx.sanity()
 
 			if base != nil {
 				// track offsetting costs
