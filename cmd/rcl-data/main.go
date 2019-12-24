@@ -43,6 +43,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/go-ini/ini"
 	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
 	"src.d10.dev/command"
@@ -109,8 +110,7 @@ func (this *AccountTag) String() string {
 }
 
 var accountByNickname map[string]AccountTag
-
-var nicknameByAccount map[AccountTag]string // would nicknameByAddress be more useful?
+var accountConfig map[AccountTag]*ini.Section
 
 func initializeNicknames() error {
 	// once
@@ -119,7 +119,7 @@ func initializeNicknames() error {
 	}
 
 	accountByNickname = make(map[string]AccountTag)
-	nicknameByAccount = make(map[AccountTag]string)
+	accountConfig = make(map[AccountTag]*ini.Section)
 
 	cfg, err := command.Config()
 	if err != nil {
@@ -148,13 +148,14 @@ func initializeNicknames() error {
 			at := NewAccountTag(*account, tag)
 			//log.Printf("account nickname %q: %v", nickname, at) // troubleshooting
 			accountByNickname[nickname] = at
-			nicknameByAccount[at] = nickname
+			accountConfig[at] = section
+
 			if at.Tag != 0 {
 				// use nickname even when tag is not used
 				noTag := NewAccountTag(*account, nil)
-				_, ok := nicknameByAccount[noTag]
+				_, ok := accountConfig[noTag]
 				if !ok {
-					nicknameByAccount[noTag] = nickname
+					accountConfig[noTag] = section
 				}
 			}
 		}
@@ -181,19 +182,29 @@ func formatValue(v data.Value) string {
 
 // returns account nickname if known; otherwise, address string
 func formatAccount(account data.Account, tag *uint32) string {
+	nick, _ := accountDetail(account, tag)
+	return nick
+}
+
+func accountDetail(account data.Account, tag *uint32) (nick, ledger string) {
 	at := NewAccountTag(account, tag)
-	nick, ok := nicknameByAccount[at]
-	if !ok && at.Tag != 0 {
+	cfg, ok := accountConfig[at]
+	if !ok && tag != nil {
+		log.Println("no nickname for:", at)
 		// fallback to nickname without tag
 		at.Tag = 0
-		nick, ok = nicknameByAccount[at]
+		cfg, ok = accountConfig[at]
 	}
 	if !ok {
-		//log.Printf("no account nickname for %v", at) // troubleshooting
+		log.Printf("no account nickname for %v in %v", at, accountConfig) // troubleshooting
 		// no nickname for this account
-		return account.String()
+		return account.String(), ""
 	}
-	return nick
+	nick = cfg.Name()
+	if cfg.HasKey("ledger") {
+		ledger = cfg.Key("ledger").Value()
+	}
+	return
 }
 
 // Helper for operations that expect a list of accounts.  We want to
