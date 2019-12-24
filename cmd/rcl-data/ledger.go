@@ -67,6 +67,10 @@ func NewLedgerSplit(event *history.AccountTx) *LedgerSplit {
 	return this
 }
 
+func (this *LedgerSplit) String() string {
+	return fmt.Sprintf("%s  %s %s ; %s", this.Name, this.Amount, this.Cost, this.Comment)
+}
+
 func (this *LedgerSplit) GetChangeAmount() *data.Amount {
 	if this.Amount == nil {
 		if this.event != nil {
@@ -285,7 +289,11 @@ func (this *LedgerTransaction) IdentifyOffsetCost(base data.Asset) {
 					}
 					this.offset[offsetting[0]] = i
 					this.offset[i] = offsetting[0]
+					continue
 				}
+
+				// TODO(dnc): if offsetting exchange, use one amount as the
+				// cost of the other, so that ledger-cli splits balance.
 			}
 		}
 	} // end each split
@@ -320,36 +328,40 @@ func (this *LedgerTransaction) RenderHead(w io.Writer) {
 }
 
 func (this *LedgerTransaction) RenderSplit(w io.Writer) {
-	for i, s := range this.Split {
-		amount := s.GetChangeAmount()
-		prefix := ""
-		if s.suppress {
-			prefix = ";"
-		}
-
-		// suppress cost when Asset to Asset
-		cost := s.Cost
-		if cost != "" {
-			offset, ok := this.offset[i]
-			if ok && offset == i {
-				log.Panic("offset of self!", i) // troubleshoot
+	// two passes, put suppressed splits at the end
+	for _, pass := range []bool{false, true} {
+		for i, s := range this.Split {
+			if s.suppress != pass {
+				continue
 			}
-			if ok && this.Split[offset].Amount == nil || this.Split[offset].Amount.Currency == s.Amount.Currency {
-				prefix := strings.SplitN(s.Name, ":", 1)
-				prefix2 := strings.SplitN(this.Split[offset].Name, ":", 1)
-				if prefix[0] == prefix2[0] {
-					log.Printf("omitting cost %q because shared asset class (%q vs %q)", cost, s.Name, this.Split[offset].Name)
-					cost = ""
+			amount := s.GetChangeAmount()
+			prefix := ""
+			if s.suppress {
+				prefix = ";"
+			}
+
+			// suppress cost when Asset to Asset
+			cost := s.Cost
+			if cost != "" {
+				offset, ok := this.offset[i]
+
+				if ok && (this.Split[offset].Amount == nil || this.Split[offset].Amount.Currency == s.Amount.Currency) {
+					prefix := strings.SplitN(s.Name, ":", 2)
+					prefix2 := strings.SplitN(this.Split[offset].Name, ":", 2)
+					if prefix[0] == prefix2[0] {
+						// omit cost of like-kind offsetting splits (no gain or basis, just transfer)
+						cost = ""
+					}
 				}
 			}
+			if amount != nil {
+				fmt.Fprintf(w, "\t%s%s\t%s %s\t%s\t; %s", prefix, s.Name, formatValue(*amount.Value), amount.Currency, cost, s.Comment)
+			} else {
+				// blank split to be balanced by ledger-cli
+				fmt.Fprintf(w, "\t%s%s\t   \t%s\t; %s", prefix, s.Name, cost, s.Comment)
+			}
+			fmt.Fprintf(w, "\n")
 		}
-		if amount != nil {
-			fmt.Fprintf(w, "\t%s%s\t%s %s\t%s\t; %s", prefix, s.Name, formatValue(*amount.Value), amount.Currency, cost, s.Comment)
-		} else {
-			// blank split to be balanced by ledger-cli
-			fmt.Fprintf(w, "\t%s%s\t   \t%s\t; %s", prefix, s.Name, cost, s.Comment)
-		}
-		fmt.Fprintf(w, "\n")
 	}
 }
 
@@ -453,7 +465,7 @@ func ledgerMain() error {
 
 	command.V(1).Infof("Inspecting %d account(s) via %q", len(account), dataAPI)
 
-	fmt.Printf("; rcl-data ledger -fee=%t -base=%q %s\n", *feeFlag, *baseFlag, strings.Join(command.OperationFlagSet.Args(), " "))
+	fmt.Printf("; rcl-data ledger -fee=%t -base=%q -n=%d %s\n", *feeFlag, *baseFlag, *nFlag, strings.Join(command.OperationFlagSet.Args(), " "))
 
 	// Iterate over balance changes for multiple accounts, in global chronological order
 	var event []*history.AccountTx
