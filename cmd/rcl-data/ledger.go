@@ -115,6 +115,12 @@ func (this *LedgerSplit) GetChangeType() string {
 
 func (this *LedgerSplit) GetInvertedChangeType() string {
 	key := this.GetChangeType()
+
+	if key == "intermediary" {
+		// TODO(dnc): is this correct?
+		return "exchange"
+	}
+
 	if strings.HasSuffix(key, "debit") {
 		return strings.Replace(key, "debit", "credit", 1)
 	} else {
@@ -275,28 +281,33 @@ func (this *LedgerTransaction) IdentifyOffsetCost(base data.Asset) {
 		case rippledata.BalanceChangeDescriptor:
 			amount := t.GetChangeAmount()
 
-			if !amount.IsNegative() && !amount.IsZero() { // if positive
-				// a credit to our account, see if we have an offsetting debit
-				key := s.GetInvertedChangeType()
-				offsetting, _ := this.byType[key]
-				if len(offsetting) == 1 && amount.Currency.String() != base.Currency {
-					offset := this.Split[offsetting[0]].GetChangeAmount()
-					if offset.Currency != amount.Currency {
-						// The cost of the credit, learned from offsetting debit
-						s.Cost = fmt.Sprintf("@@ %s %s", offset.Negate().Value, offset.Currency)
-					} else {
-						// same currency indicates a move from one wallet to another, no price needed
-					}
-					this.offset[offsetting[0]] = i
-					this.offset[i] = offsetting[0]
-					continue
-				}
+			if amount.Currency.String() == base.Currency {
+				// associate cost with offseting split (later iteration of this loop)
+				continue
+			}
+			if amount.IsZero() {
+				continue
+			}
 
-				// TODO(dnc): if offsetting exchange, use one amount as the
-				// cost of the other, so that ledger-cli splits balance.
+			key := s.GetInvertedChangeType()
+			offsetting, _ := this.byType[key]
+			if len(offsetting) == 1 {
+				offset := this.Split[offsetting[0]].GetChangeAmount()
+				if offset.Currency != amount.Currency {
+					// The cost of the credit, learned from offsetting debit
+					if offset.IsNegative() || offset.Currency.String() == base.Currency {
+						s.Cost = fmt.Sprintf("@@ %s %s", offset.Abs().Value, offset.Currency)
+					}
+				} else {
+					// same currency indicates a move from one wallet to another, no price needed
+				}
+				this.offset[offsetting[0]] = i
+				this.offset[i] = offsetting[0]
+				continue
 			}
 		}
 	} // end each split
+
 }
 
 func (this *LedgerTransaction) Suppress(typ string) {
@@ -319,6 +330,10 @@ func (this *LedgerTransaction) IsSuppressed() bool {
 		}
 	}
 	return true // all splits suppressed
+}
+
+func (this *LedgerTransaction) String() string {
+	return fmt.Sprintf("%s %s; %s", this.Date, this.Payee, this.Comment)
 }
 
 // Formats transaction header to stdout and splits to table writer.
@@ -430,9 +445,10 @@ func ledgerMain() error {
 	defaultAsset := cfg.Section("").Key("base").MustString("USD/rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B") // rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B is bitstamp
 
 	// define flags
-	feeFlag := command.OperationFlagSet.Bool("fee", false, "include transaction fees")
-	nFlag := command.OperationFlagSet.Int("n", 0, "how many transactions to inspect (for debugging); use 0 for all")
 	baseFlag := command.OperationFlagSet.String("base", defaultAsset, "query for price relative to base")
+	feeFlag := command.OperationFlagSet.Bool("fee", false, "include transaction fees")
+	endFlag := command.OperationFlagSet.String("end", "", "last date to include")
+	nFlag := command.OperationFlagSet.Int("n", 0, "how many transactions to inspect (for debugging); use 0 for all")
 
 	// parse flags
 	err := command.OperationFlagSet.Parse(command.Args()[1:])
@@ -456,6 +472,13 @@ func ledgerMain() error {
 	if *baseFlag != "" {
 		base, err = data.NewAsset(*baseFlag)
 		command.Check(err)
+	}
+
+	var endDate time.Time
+	if *endFlag != "" {
+		endDate, err = time.Parse("2006-01-02", *endFlag)
+		command.Check(err)
+
 	}
 
 	// TODO(dnc): make data API url configurable
@@ -495,6 +518,12 @@ func ledgerMain() error {
 		// build ledger-cli transaction, where each ripple-data "event" is a "split"
 		ledgerTx := NewLedgerTransaction(event)
 		ledgerTx.sanity()
+
+		if *endFlag != "" && endDate.Before(ledgerTx.GetExecutedTime()) {
+			command.Infof("reached end date %q (before transaction %q)", *endFlag, ledgerTx)
+			fmt.Printf("; reached end date %q (-end flag)", *endFlag)
+			break
+		}
 
 		if !*feeFlag {
 			ledgerTx.Suppress("transaction_cost")
