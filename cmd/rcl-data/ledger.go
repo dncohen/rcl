@@ -262,7 +262,7 @@ func (this *LedgerTransaction) affects(account data.Account, tag *uint32, reason
 
 func (this *LedgerTransaction) GetHash() data.Hash256 { return this.Split[0].event.GetHash() }
 func (this *LedgerTransaction) GetExecutedTime() time.Time {
-	return this.Split[0].event.GetExecutedTime()
+	return this.Split[0].event.GetExecutedTime().In(time.Local)
 }
 func (this *LedgerTransaction) GetBase() *data.TxBase { return this.tx.Transaction.Tx.GetBase() }
 
@@ -498,7 +498,9 @@ func ledgerMain() error {
 	if *endFlag != "" {
 		endDate, err = time.Parse("2006-01-02", *endFlag)
 		command.Check(err)
-
+		// To round to the last midnight in the local timezone, create a new Date.
+		endDate = time.Date(endDate.Year(), endDate.Month(), endDate.Day(), 0, 0, 0, 0, time.Local)
+		log.Println("endDate:", endDate)
 	}
 
 	// TODO(dnc): make data API url configurable
