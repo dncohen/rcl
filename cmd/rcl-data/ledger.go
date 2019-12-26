@@ -297,6 +297,8 @@ func (this *LedgerTransaction) IdentifyOffsetCost(base data.Asset) {
 					// The cost of the credit, learned from offsetting debit
 					if offset.IsNegative() || offset.Currency.String() == base.Currency {
 						s.Cost = fmt.Sprintf("@@ %s %s", offset.Abs().Value, offset.Currency)
+					} else {
+						this.Split[offsetting[0]].Cost = fmt.Sprintf("@@ %s %s", amount.Abs().Value, amount.Currency)
 					}
 				} else {
 					// same currency indicates a move from one wallet to another, no price needed
@@ -430,6 +432,15 @@ func (this *LedgerTransaction) NormalizePrice(dataClient rippledata.Client, base
 					continue
 				}
 				newData[amount.Currency] = ledgerPriceCache[amount.Currency]
+			}
+
+			// omit cost if this split is already offset by another with
+			// cost associated (note: adding price line to ledger-data is
+			// beneficial here, so we still return price in newData)
+			offset, ok := this.offset[i]
+			if ok && this.Split[offset].Cost != "" {
+				s.Cost = fmt.Sprintf("; @ %s %s", ledgerPriceCache[amount.Currency].Rate, base.Currency) // debug
+				continue
 			}
 
 			// apply normalized price to split
