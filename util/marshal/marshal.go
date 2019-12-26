@@ -29,7 +29,7 @@ func DecodeTransactions(in io.Reader, txs chan (data.Transaction)) error {
 	// Register instances of what we accept.
 	register()
 
-	// Input is first gob encoded, then something terminal/file friendly.  Decode in reverse.  Tempting to use base64 (it's concise) but that encoder buffers, which leads to unwanted delays when piping output from one process to another.
+	// Input is first gob encoded, then something terminal/file friendly.  Decode in reverse.  Tempting to use base64 (it's concise) but that encodes buffers, which leads to unwanted delays when piping output from one process to another.
 	//b64Decoder := base64.NewDecoder(base64.StdEncoding, in)
 	outerDecoder := hex.NewDecoder(in)
 	gobDecoder := gob.NewDecoder(outerDecoder)
