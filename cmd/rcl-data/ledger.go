@@ -384,18 +384,27 @@ func (this *LedgerTransaction) RenderSplit(w io.Writer) {
 
 // cache normalized prices
 var ledgerPriceCache map[data.Currency]*rippledata.NormalizeResponse
+var ledgerPriceCacheExpire time.Time
 
 func (this *LedgerTransaction) NormalizePrice(dataClient rippledata.Client, base data.Asset) map[data.Currency]*rippledata.NormalizeResponse {
-	// TODO(dnc): make cache last hours or days
-	ledgerPriceCache = nil // expire cache (every transaction)
+
+	executed := this.GetExecutedTime()
+
+	if ledgerPriceCache != nil && executed.After(ledgerPriceCacheExpire) {
+		// expired outdated cache
+		ledgerPriceCache = nil
+	}
 
 	if ledgerPriceCache == nil {
 		ledgerPriceCache = make(map[data.Currency]*rippledata.NormalizeResponse)
+		// To round to the last midnight in the local timezone, create a new Date.
+		midnight := time.Date(executed.Year(), executed.Month(), executed.Day(), 0, 0, 0, 0, time.Local)
+		ledgerPriceCacheExpire = midnight.Add(time.Hour * 24)
 	}
 
 	newData := make(map[data.Currency]*rippledata.NormalizeResponse)
 
-	for _, s := range this.Split {
+	for i, s := range this.Split {
 		if s.Cost != "" {
 			// cost already known
 			continue
@@ -416,7 +425,7 @@ func (this *LedgerTransaction) NormalizePrice(dataClient rippledata.Client, base
 				continue
 			}
 			if amount.Currency.String() == base.Currency {
-				// nothing to show
+				// no conversion needed
 				continue
 			}
 
@@ -562,7 +571,7 @@ func ledgerMain() error {
 
 				// write price history in ledger-cli format
 				for currency, norm := range normalized {
-					fmt.Printf("\n; Normalized value of %s %s is %s %s on %s\n", norm.Amount, currency, norm.Converted, base.Currency, ledgerTx.GetExecutedTime().Format("2006/01/02 15:04:05"))
+					fmt.Printf("\n; Value of %s %s is %s %s on %s\n", norm.Amount, currency, norm.Converted, base.Currency, ledgerTx.GetExecutedTime().Format("2006/01/02 15:04:05 (MST)"))
 					// https://www.ledger-cli.org/3.0/doc/ledger3.html#Commodity-price-histories
 					fmt.Printf("P %s %s %s %s\n",
 						ledgerTx.GetExecutedTime().Format("2006/01/02 15:04:05"),
