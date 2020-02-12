@@ -1,7 +1,9 @@
 package rippledata
 
 import (
+	"encoding/json"
 	"log"
+	"regexp"
 	"time"
 
 	"github.com/rubblelabs/ripple/data"
@@ -10,12 +12,34 @@ import (
 type GetTransactionResponse struct {
 	Response
 	Transaction struct {
-		LedgerIndex uint32                       `json:"ledger_index"`
-		Date        time.Time                    `json:"date"`
-		Hash        data.Hash256                 `json:"hash"`
-		Tx          data.TransactionWithMetaData `json:"tx"` // actually doesn't have metadata :(
-		Meta        data.MetaData                `json:"meta"`
-	}
+		LedgerIndex uint32       `json:"ledger_index"`
+		Date        time.Time    `json:"date"`
+		Hash        data.Hash256 `json:"hash"`
+
+		// Tx field is data.TransactionWithMetaData (instead of
+		// data.TxBase) because TransactionWithMetaData knows how to
+		// unmarshal many types of transaction from JSON.
+		Tx   data.TransactionWithMetaData `json:"tx"`   // json from Data API actually doesn't have metadata :(
+		Meta data.MetaData                `json:"meta"` // see postop(), we copy this into Tx
+
+	} `json:"transaction"`
+}
+
+var fixSignerEntry = regexp.MustCompile(`{\s*"SignerEntry":\s*({[^}]*})\s*}`)
+
+// Data API structures differ in quirky ways from rippled data
+// structures.  This kludge unmangles some of the damage.
+func (this *GetTransactionResponse) triage(in json.RawMessage) json.RawMessage {
+	out := fixSignerEntry.ReplaceAllString(string(in), `$1`)
+	return json.RawMessage(out)
+}
+
+// Like triage, this kluge reconciles differences between ripple data
+// API structures vs rippled data structures.
+func (this *GetTransactionResponse) postop() {
+	// These differences, Data API vs rippled, that I've noticed.  There are likely many more.
+	this.Transaction.Tx.GetBase().Hash = this.Transaction.Hash
+	this.Transaction.Tx.MetaData = this.Transaction.Meta
 }
 
 func (this Client) Transaction(hash data.Hash256) (*GetTransactionResponse, error) {
