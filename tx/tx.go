@@ -124,9 +124,12 @@ func AddMemo(value interface{}) func(data.Transaction) error {
 				memoData = v
 			}
 		case string:
+			if v == "" {
+				return nil // No memo
+			}
 			memoData = []byte(v)
 		case *string:
-			if v == nil {
+			if v == nil || *v == "" {
 				return nil // nil pointer means no memo
 			} else {
 				memoData = []byte(*v)
