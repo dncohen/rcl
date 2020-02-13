@@ -21,7 +21,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 
@@ -29,9 +28,8 @@ import (
 	"src.d10.dev/command"
 
 	"github.com/dncohen/rcl/internal/cmd"
+	"github.com/dncohen/rcl/internal/pipeline"
 	"github.com/dncohen/rcl/tx"
-	"github.com/dncohen/rcl/util/marshal"
-	"github.com/golang/glog"
 	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
 	"github.com/rubblelabs/ripple/websockets"
@@ -160,21 +158,15 @@ func opSend() error {
 		tx.SetCanonicalSig(true),
 	)
 
-	if glog.V(1) {
-		// Show in json format (debug)
-		j, _ := json.MarshalIndent(tx, "", "\t")
-		glog.Infof("Unsigned:\n%s\n", string(j))
-	}
-
 	// Prepare to encode transaction output.
-	txs := make(chan (data.Transaction))
+	unsignedOut := make(chan (data.Transaction))
 	g.Go(func() error {
-		return marshal.EncodeTransactions(os.Stdout, txs)
+		return pipeline.EncodeOutput(os.Stdout, unsignedOut)
 	})
 
 	// Pass unsigned transaction to encoder
-	txs <- tx
-	close(txs)
+	unsignedOut <- tx
+	close(unsignedOut)
 
 	err = g.Wait()
 	command.Check(err)

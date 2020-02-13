@@ -24,13 +24,12 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"os"
 
 	"golang.org/x/sync/errgroup"
 	"src.d10.dev/command"
 
-	"github.com/dncohen/rcl/util/marshal"
+	"github.com/dncohen/rcl/internal/pipeline"
 	"github.com/rubblelabs/ripple/data"
 )
 
@@ -48,23 +47,16 @@ func opSave() error {
 	// decode transactions from stdin
 	txIn := make(chan (data.Transaction))
 	go func() {
-		err := marshal.DecodeTransactions(os.Stdin, txIn)
-		if err != nil {
-			if err == io.EOF {
-				// Expected at end of input
-				// TODO: ensure there's been at least one
-			} else {
-				command.Check(err)
-			}
-			close(txIn)
-		}
+		err := pipeline.DecodeInput(txIn, os.Stdin)
+		command.Check(err)
+		close(txIn)
 	}()
 
 	// prepare to encode transactions to stdout, so we can be part of a pipeline.
 	var g errgroup.Group
 	txOut := make(chan (data.Transaction))
 	g.Go(func() error {
-		return marshal.EncodeTransactions(os.Stdout, txOut)
+		return pipeline.EncodeOutput(os.Stdout, txOut)
 	})
 	// Later, we will wait for g to complete.
 

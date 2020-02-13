@@ -22,15 +22,14 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"os"
 
 	"golang.org/x/sync/errgroup"
 	"src.d10.dev/command"
 
 	"github.com/dncohen/rcl/internal/cmd"
+	"github.com/dncohen/rcl/internal/pipeline"
 	"github.com/dncohen/rcl/util"
-	"github.com/dncohen/rcl/util/marshal"
 	"github.com/rubblelabs/ripple/data"
 )
 
@@ -50,18 +49,12 @@ func opSubmit() error {
 	// TODO(dnc): support files or pipelin
 
 	// Read incoming signed transactions from stdin
-	signedTransactions := make(chan (data.Transaction))
+	signedIn := make(chan (data.Transaction))
 	go func() {
-		err := marshal.DecodeTransactions(os.Stdin, signedTransactions)
-		if err != nil {
-			if err == io.EOF {
-				// Expected at end of input
-				// TODO: ensure there's been at least one
-			} else {
-				command.Check(err)
-			}
-			close(signedTransactions)
-		}
+		defer close(signedIn)
+
+		err := pipeline.DecodeInput(signedIn, os.Stdin)
+		command.Check(err)
 	}()
 
 	rippled, err := cmd.Rippled()
@@ -80,7 +73,7 @@ func opSubmit() error {
 	var g errgroup.Group
 
 	// Submit all transaction decoded
-	for tx := range signedTransactions {
+	for tx := range signedIn {
 		tx := tx // scope (needed ?)
 
 		// TODO(dnc): support interactive mode where user is prompted before submitting.

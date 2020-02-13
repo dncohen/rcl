@@ -31,8 +31,8 @@ import (
 	"src.d10.dev/command"
 
 	"github.com/dncohen/rcl/internal/cmd"
+	"github.com/dncohen/rcl/internal/pipeline"
 	"github.com/dncohen/rcl/tx"
-	"github.com/dncohen/rcl/util/marshal"
 	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
 	"github.com/rubblelabs/ripple/websockets"
@@ -150,9 +150,9 @@ func opCancel() error {
 	command.Check(err)
 
 	// Prepare to encode transaction output.
-	txs := make(chan (data.Transaction))
+	unsignedOut := make(chan (data.Transaction))
 	g.Go(func() error {
-		return marshal.EncodeTransactions(os.Stdout, txs)
+		return pipeline.EncodeOutput(os.Stdout, unsignedOut)
 	})
 
 	// Prepare transactions.
@@ -182,9 +182,9 @@ func opCancel() error {
 		log.Printf("Unsigned %s by %s prepared.\n", t.GetType(), t.GetBase().Account)
 
 		// Pass unsigned transaction to encoder
-		txs <- t
+		unsignedOut <- t
 	}
-	close(txs)
+	close(unsignedOut)
 
 	// Wait for all output to be encoded
 	err = g.Wait()
