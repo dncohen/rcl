@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"errors"
+	"strings"
 
+	"github.com/rubblelabs/ripple/data"
 	"src.d10.dev/command"
 	"src.d10.dev/command/config"
 )
@@ -37,4 +39,23 @@ func DataAPI() (string, error) {
 		return val, errors.New("data api address not found in configuration file")
 	}
 	return val, nil
+}
+
+func AmountFromArg(arg string) (*data.Amount, error) {
+	amt, err := data.NewAmount(arg)
+	if err != nil {
+		// didn't parse, perhaps the issuer is a nickname
+		parts := strings.Split(arg, "/") // i.e. 1/USD/rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B or /1/USD/bitstamp
+		if len(parts) == 3 && parts[2] != "" {
+			acctArg, err := ParseAccountArg([]string{parts[2]})
+			if err != nil {
+				return nil, err
+			}
+
+			// replace nickname in amount
+			amt, err = data.NewAmount(parts[0] + "/" + parts[1] + "/" + acctArg[0].Account.String())
+			return amt, err
+		}
+	}
+	return amt, err
 }

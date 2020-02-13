@@ -118,6 +118,7 @@ func FormatAccount(account data.Account, tag *uint32) string {
 	return nick
 }
 
+// deprecated, see AccountConfig
 func accountDetail(account data.Account, tag *uint32) (nick, ledger string) {
 	at := NewAccountTag(account, tag)
 	cfg, ok := accountConfig[at]
@@ -132,10 +133,20 @@ func accountDetail(account data.Account, tag *uint32) (nick, ledger string) {
 		return account.String(), ""
 	}
 	nick = cfg.Name()
-	if cfg.HasKey("ledger") {
+	if cfg.HasKey("ledger") { // TODO(dnc): remind myself what this is about?
 		ledger = cfg.Key("ledger").Value()
 	}
 	return
+}
+
+func AccountConfig(acct data.Account, tag *uint32) (*ini.Section, bool) {
+	t := uint32(0)
+	if tag != nil {
+		t = *tag
+	}
+
+	cfg, ok := accountConfig[AccountTag{acct, t}]
+	return cfg, ok
 }
 
 // Helper for operations that expect a list of accounts.  We want to
