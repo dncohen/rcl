@@ -1,92 +1,83 @@
+// Copyright (C) 2019, 2020  David N. Cohen
+
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+// Command rcl-tx
+//
+// The rcl-tx command composes transactions for the Ripple Consensus
+// Ledger.
+//
+// Each subcommand has a -help flag that explains it in more detail.  For
+// instance
+//
+//     rcl-tx sell -help
+//
+// explains the purpose and usage of the sell subcommand.
+//
+// There is a set of global flags such as -config to specify the
+// configuration directory, where rcl-tx expects to find one or more
+// *.cfg files.  These global flags apply to all subcommands.
+//
+// Each subcommand has its own set of flags, which if used must appear
+// after the subcommand name.
+//
+// For a list of available subcommands and global flags, run
+//
+//     rcl-tx -help
+//
 package main
 
+// use `go get src.d10.dev/dumbdown`
+//go:generate sh -c "go doc | dumbdown > README.md"
+
 import (
-	"encoding/base64"
-	"encoding/gob"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
-	"math/rand"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"time"
 
-	"github.com/dncohen/rcl/cfg"
-	"github.com/golang/glog"
+	"github.com/dncohen/rcl/internal/cmd"
+	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
-
-	"upspin.io/shutdown"
+	"src.d10.dev/command"
+	"src.d10.dev/command/config"
 )
 
-// An upspin-inspired command with subcommands.  This manipulates
-// Ripple Consensus Ledger transactions.
+var (
+	// transacting account, when composing transactions
+	asFlag    *string
+	asAccount *data.Account
+	asTag     *uint32
 
-type State struct {
-	Name     string // Name of the subcommand we are running.
-	ExitCode int    // Exit with non-zero status for minor problems.
-}
-
-const intro = `
- 
-The rcl-tx command composes transactions for the Ripple Consensus
-Ledger.
-
-Each subcommand has a -help flag that explains it in more detail.  For
-instance
-
-  rcl-tx sell -help
-
-explains the purpose and usage of the sell subcommand.
-
-There is a set of global flags such as -config to specify the
-configuration directory, where rcl-tx expects to find one or more
-*.cfg files.  These global flags apply to all subcommands.
-
-Each subcommand has its own set of flags, which if used must appear
-after the subcommand name.
-
-For a list of available subcommands and global flags, run
-
-  rcl-tx -help
-
-`
+	// note field common to all transaction creating operations
+	memoFlag    *string
+	memohexFlag *string
+	memohex     []byte
+)
 
 const (
 	LedgerSequenceInterval = 10
-	programName            = "rcl-tx"
 )
 
-var commands = map[string]func(*State, ...string){
-	// Utilities that apply to all transaction types
-	"monitor": (*State).monitor,
-	"save":    (*State).save,
-	"submit":  (*State).submit,
-
-	// Transactions composers, specific to a transaction type
-	"cancel": (*State).cancel, // OfferCancel
-	"sell":   (*State).sell,   // OfferCreate
-	"send":   (*State).send,   // simple Payment
-	"trust":  (*State).trust,  // TrustSet
-	"set":    (*State).set,    // AccountSet
-}
-
 var (
-	asAccount *data.Account // The originator when constructing transactions.
-	asTag     *uint32
-
-	// Configuration, parsed from .cfg file(s)
-	config cfg.Config
-
 	// Helpers for value math
 	one data.Value
 )
 
 func init() {
-	rand.Seed(time.Now().UTC().UnixNano())
-
 	tmp, err := data.NewNonNativeValue(1, 0)
 	if err != nil {
 		log.Panic(err)
@@ -95,265 +86,61 @@ func init() {
 }
 
 func main() {
-	state, args, ok := setup(flag.CommandLine, os.Args[1:])
-	if !ok || len(args) == 0 {
-		help()
-	}
-	if args[0] == "help" {
-		help(args[1:]...)
-	}
-	state.run(args)
-	state.ExitNow()
-}
+	command.RegisterCommand(command.Command{
+		Application: `rcl`,
+		Description: `Construct and submit Ripple Consensus Ledger (XRP Ledger) transactions.`,
+	})
 
-// setup initializes the command given the full command-line argument
-// list, args. It applies any global flags set on the command line and returns
-// the initialized State and the arg list after the global flags, starting with
-// the subcommand that will be run.
-func setup(fs *flag.FlagSet, args []string) (*State, []string, bool) {
-	log.SetFlags(0)
-	log.SetPrefix(programName + ": ")
-	fs.Usage = usage
-	var err error
-	// Flags on primary command (as opposed to sub-command)
-	asAddress := fs.String("as", "", "Construct transactions as this address.")
-	configPath := fs.String("config", ".", "Directory containing configuration files")
+	// transaction operations accept -as <account>
+	// TODO(dnc): default from config
+	asFlag = command.CommandFlagSet.String("as", "", "address of transacting account (i.e. sender of payment)")
 
-	err = fs.Parse(args)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(2)
+	// TODO(dnc): support multiple memo per tx
+
+	memoFlag = command.CommandFlagSet.String("memo", "", "note, to be hex encoded and written to ledger with a transaction")
+	memohexFlag = command.CommandFlagSet.String("memohex", "", "note, already hex encoded")
+
+	// note, command.Config() calls command.CommandFlagSet.Parse()
+	_, err := command.Config()
+	if errors.Cause(err) == config.ConfigNotFound {
+		// not a problem, we'll use defaults
+		// TODO(dnc): if -config specified explicitly on command line, make this a fatal error
+		command.Info(err)
+		err = nil
 	}
+	// if error, fail and show usage
+	command.CheckUsage(err)
 
-	config, err = cfg.LooseLoadGlob(filepath.Join(*configPath, "*.cfg"))
-	if err != nil && err != cfg.FileNotFound {
-		fmt.Println(err)
-		os.Exit(2)
-	}
-
-	// Honor -as <address> flag.
-	if asAddress != nil && *asAddress != "" {
-		asAccount, asTag, err = config.AccountFromArg(*asAddress)
+	if *asFlag != "" {
+		tmp, err := cmd.ParseAccountArg([]string{*asFlag})
 		if err != nil {
-			fmt.Println(err)
-			os.Exit(2)
+			command.Check(fmt.Errorf("bad address (%q): %w", *asFlag, err))
 		}
-	} else {
-		// Default -as <address> from configuration file.
-		asAccount, asTag, _ = config.GetDefaultAccount()
-		// Not all subcommands require asAccount, so we do not require it.
+
+		asAccount, asTag = &tmp[0].Account, &tmp[0].Tag
 	}
 
-	if len(fs.Args()) < 1 {
-		return nil, nil, false
-	}
-	state := newState(strings.ToLower(fs.Arg(0)))
-	state.init()
-
-	return state, fs.Args(), true
-}
-
-// run runs a single command specified by the arguments, which should begin with
-// the subcommand.
-func (state *State) run(args []string) {
-	cmd := state.getCommand(args[0])
-	cmd(state, args[1:]...)
-}
-
-func usage() {
-	fmt.Fprintf(os.Stderr, "Usage of %s:\n", programName)
-	fmt.Fprintf(os.Stderr, "\t%s [globalflags] <command> [flags]\n", programName)
-	printCommands()
-	fmt.Fprintf(os.Stderr, "Global flags:\n")
-	flag.PrintDefaults()
-}
-
-// usageAndExit prints usage message from provided FlagSet,
-// and exits the program with status code 2.
-func usageAndExit(fs *flag.FlagSet) {
-	fs.Usage()
-	os.Exit(2)
-}
-
-// help prints the help for the arguments provided, or if there is none,
-// for the command itself.
-func help(args ...string) {
-	// Find the first non-flag argument.
-	cmd := ""
-	for _, arg := range args {
-		if !strings.HasPrefix(arg, "-") {
-			cmd = arg
-			break
+	if *memohexFlag != "" {
+		memohex = make([]byte, hex.DecodedLen(len([]byte(*memohexFlag))))
+		_, err := hex.Decode(memohex, []byte(*memohexFlag))
+		if err != nil {
+			command.Check(fmt.Errorf("bad memohex (%q): %w", *memohexFlag, err))
 		}
 	}
-	if cmd == "" {
-		fmt.Fprintln(os.Stderr, intro)
-	} else {
-		// Simplest solution is re-execing.
-		command := exec.Command(programName, cmd, "-help")
-		command.Stdout = os.Stdout
-		command.Stderr = os.Stderr
-		command.Run()
-	}
-	os.Exit(2)
-}
 
-// printCommands shows the available commands.
-func printCommands() {
-	fmt.Fprintf(os.Stderr, "Transaction commands:\n")
-	var cmdStrs []string
-	for cmd := range commands {
-		cmdStrs = append(cmdStrs, cmd)
+	// this command requires an operation
+	if len(flag.CommandLine.Args()) < 1 {
+		command.CheckUsage(errors.New("command requires an operation"))
 	}
 
-	// There may be dups; filter them.
-	prev := ""
-	for _, cmd := range cmdStrs {
-		if cmd == prev {
-			continue
-		}
-		prev = cmd
-		fmt.Fprintf(os.Stderr, "\t%s\n", cmd)
-	}
-}
+	// default prefix for subcommand
+	log.SetPrefix(fmt.Sprintf("rcl-tx %s: ", flag.CommandLine.Args()[0]))
 
-// getCommand looks up the command named by op.
-// If it's in the commands tables, we're done.
-// If the command can't be found, it exits after listing the
-// commands that do exist.
-func (s *State) getCommand(op string) func(*State, ...string) {
-	fn := commands[op]
-	if fn != nil {
-		return fn
-	}
-	printCommands()
-	s.Exitf("no such command %q", op)
-	return nil
-}
+	err = command.CurrentOperation().Operate()
+	command.CheckUsage(err)
 
-// newState returns a State with enough initialized to run exit, etc.
-// It does not contain a Config.
-func newState(name string) *State {
-	s := &State{
-		Name: name,
-	}
-	return s
-}
+	command.Exit()
 
-// init initializes the State with what is required to run the subcommand,
-// usually including setting up a Config.
-func (s *State) init() {
-
-	return
-}
-
-// ExitNow terminates the process with the current ExitCode.
-func (s *State) ExitNow() {
-	glog.Flush() // We use glog, and rubblelabs library uses glog.
-
-	shutdown.Now(s.ExitCode)
-}
-
-// Exitf prints the error and exits the program.
-// If we are interactive, it calls panic("exit"), which is intended to be recovered
-// from by the calling interpreter.
-// We don't use log (although the packages we call do) because the errors
-// are for regular people.
-func (s *State) Exitf(format string, args ...interface{}) {
-	format = fmt.Sprintf("%s: %s\n", s.Name, format)
-	fmt.Fprintf(os.Stderr, format, args...)
-	s.ExitCode = 1
-	s.ExitNow()
-}
-
-// Exit calls s.Exitf with the error.
-func (s *State) Exit(err error) {
-	s.Exitf("%s", err)
-}
-
-// ParseFlags parses the flags in the command line arguments,
-// according to those set in the flag set.
-func (s *State) ParseFlags(fs *flag.FlagSet, args []string, help, usage string) {
-	helpFlag := fs.Bool("help", false, "print more information about the command")
-	usageFn := func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s %s\n", programName, usage)
-		if *helpFlag {
-			fmt.Fprintln(os.Stderr, help)
-		}
-		// How many flags?
-		n := 0
-		fs.VisitAll(func(*flag.Flag) { n++ })
-		if n > 0 {
-			fmt.Fprintf(os.Stderr, "Flags:\n")
-			fs.PrintDefaults()
-		}
-	}
-	fs.Usage = usageFn
-	err := fs.Parse(args)
-	if err != nil {
-		s.Exit(err)
-	}
-	if *helpFlag {
-		fs.Usage()
-		os.Exit(2)
-	}
-}
-
-// IntFlag returns the value of the named integer flag in the flag set.
-func intFlag(fs *flag.FlagSet, name string) int {
-	return fs.Lookup(name).Value.(flag.Getter).Get().(int)
-}
-
-// BoolFlag returns the value of the named boolean flag in the flag set.
-func boolFlag(fs *flag.FlagSet, name string) bool {
-	return fs.Lookup(name).Value.(flag.Getter).Get().(bool)
-}
-
-// StringFlag returns the value of the named string flag in the flag set.
-func stringFlag(fs *flag.FlagSet, name string) string {
-	return fs.Lookup(name).Value.(flag.Getter).Get().(string)
-}
-
-func float64Flag(fs *flag.FlagSet, name string) float64 {
-	return fs.Lookup(name).Value.(flag.Getter).Get().(float64)
-}
-
-// deprecated in favor of marshal helper package. XXX
-func registerTypes() {
-	// Register instances of what we accept.
-	// Should have all tx types here, I am putting them here when needed.
-	// TODO move to shared helper.
-	gob.Register(&data.AccountSet{})
-	gob.Register(&data.OfferCancel{})
-	gob.Register(&data.OfferCreate{})
-	gob.Register(&data.Payment{})
-	gob.Register(&data.TrustSet{})
-}
-
-func decodeInput() (*data.Transaction, error) {
-	// GOBs are tricksy.
-	// Decode into interface.
-	var tx data.Transaction
-
-	encoding := "gob64" // TODO make others optional, if needed.
-	registerTypes()
-
-	var err error
-	// NOTE currently only "gob64" is tested/working/used, and barely.
-	if encoding == "gob64" {
-		b64Reader := base64.NewDecoder(base64.StdEncoding, os.Stdin)
-		err = gob.NewDecoder(b64Reader).Decode(&tx) // Decode into *pointer* to interface.
-	} else if encoding == "gob" {
-		err = gob.NewDecoder(os.Stdin).Decode(&tx)
-	} else {
-		err = fmt.Errorf("Unexpected encoding: %s\n", encoding)
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &tx, nil
 }
 
 // Encode a transaction to JSON.  A helper function for debug output

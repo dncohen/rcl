@@ -1,114 +1,80 @@
+// Copyright (C) 2018-2020  David N. Cohen
+// This file is part of github.com/dncohen/rcl
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+// Operation set
+//
+// Compose an RCL transaction to change account settings.
+//
 package main
 
 import (
-	"encoding/hex"
-	"encoding/json"
-	"flag"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 
 	"golang.org/x/sync/errgroup"
+	"src.d10.dev/command"
 
+	"github.com/dncohen/rcl/internal/cmd"
 	"github.com/dncohen/rcl/tx"
 	"github.com/dncohen/rcl/util/marshal"
-	"github.com/golang/glog"
 	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
 	"github.com/rubblelabs/ripple/websockets"
 )
 
-// Implements `set` subcommand.  Set fields and flags for an account.
-// At the moment, few of the fields described on
-// https://developers.ripple.com/accountset.html are supported.
-
 const (
 	unchanged = "UNCHANGED"
 )
 
-func (s *State) set(args ...string) {
-
-	const help = `
-
-Set flag or a field on an account.
-
-`
-
-	fs := flag.NewFlagSet("set", flag.ExitOnError)
-
-	fs.String("domain", unchanged, "The domain that owns this account, in lower case.")
-
-	// Memo fields allowed on any transaction. So this logic should be
-	// moved to main.go or somewhere else common to each rcl-tx
-	// subcommand.  Also TODO, support multiple memos per transaction.
-	fs.String("memo", "", "A memo string, to be hex encoded and written to ledger with the transaction.")
-	fs.String("memohex", "", "A memo string, already hex encoded, to be written to ledger with the transaction.")
-
-	s.ParseFlags(fs, args, help, "set [-domain <example.com>]")
-
-	s.setCommand(fs)
+func init() {
+	command.RegisterOperation(command.Operation{
+		Handler:     opSet,
+		Name:        "set",
+		Syntax:      "set ",
+		Description: `Set a flag or field on an RCL account.`,
+	})
 }
 
-func (s *State) setCommand(fs *flag.FlagSet) {
-	log.SetPrefix(programName + " set: ")
-	fail := false
+func opSet() error {
 
-	domainFlag := stringFlag(fs, "domain")
-	var domain *string
+	domainFlag := command.OperationFlagSet.String("domain", unchanged, "The domain that owns this account, in lower case.")
 
-	if domainFlag != unchanged {
-		domainLower := strings.ToLower(domainFlag)
-		if domainFlag != domainLower {
-			log.Printf("Expected domain in lower case, got \"%s\".  Try \"%s\".", domainFlag, domainLower)
-			fail = true
-		} else {
-			domain = &domainFlag
+	command.CheckUsage(command.ParseOperationFlagSet())
+
+	if *asFlag == "" {
+		return errors.New("operation requires -as <account> flag")
+	}
+
+	if *domainFlag != unchanged {
+		domainLower := strings.ToLower(*domainFlag)
+		if *domainFlag != domainLower {
+			command.Check(fmt.Errorf("spell domain (%q) in lower-case, i.e. %q", *domainFlag, domainLower))
 		}
 	}
 
-	memoFlag := stringFlag(fs, "memo")
-	var memo *string
-	if memoFlag != "" {
-		memo = &memoFlag
-	}
-
-	memohexFlag := stringFlag(fs, "memohex")
-	memohexBytes := []byte(memohexFlag)
-	var memohex []byte
-	if memohexFlag != "" {
-		memohex = make([]byte, hex.DecodedLen(len(memohexBytes)))
-		_, err := hex.Decode(memohex, memohexBytes)
-		if err != nil {
-			log.Printf("Failed to decode hex memo (\"%s\")\n", memohexFlag)
-			fail = true
-		}
-	}
-
-	if asAccount == nil {
-		fail = true
-		fmt.Println("Use -as <address> flag to specify an account.")
-		usageAndExit(flag.CommandLine)
-	}
-
-	rippled := config.GetRippled()
-	if rippled == "" {
-		log.Println("No rippled URL found in .cfg.")
-		fail = true
-	}
-
-	if fail {
-		s.ExitNow()
-	}
+	rippled, err := cmd.Rippled()
+	command.Check(err)
 
 	// Learn needed details, i.e. account sequence number.
 	remote, err := websockets.NewRemote(rippled)
-	if err != nil {
-		s.Exit(errors.Wrapf(err, "Failed to connect to %s", rippled))
-	}
+	command.Check(err)
 	defer remote.Close()
 
-	log.Printf("Connected to %s\n", rippled) // debug
+	command.Infof("Connected to %q\n", rippled) // debug
 
 	var g errgroup.Group
 	var accountInfo *websockets.AccountInfoResult
@@ -116,15 +82,13 @@ func (s *State) setCommand(fs *flag.FlagSet) {
 		var err error
 		accountInfo, err = remote.AccountInfo(*asAccount)
 		if err != nil {
-			log.Printf("Failed to get account_info %s: %s", asAccount, err)
+			command.Errorf("Failed to get account_info %s: %s", asAccount, err)
 			return err
 		}
 		return nil
 	})
 	err = g.Wait()
-	if err != nil {
-		s.Exit(err)
-	}
+	command.Check(err)
 
 	// Prepare to encode transaction output.
 	txs := make(chan (data.Transaction))
@@ -132,30 +96,26 @@ func (s *State) setCommand(fs *flag.FlagSet) {
 		return marshal.EncodeTransactions(os.Stdout, txs)
 	})
 
+	// tx setters expect nil for unchanged
+	if *domainFlag == unchanged {
+		domainFlag = nil
+	}
+	if *memoFlag == "" {
+		memoFlag = nil
+	}
+
 	t, err := tx.NewAccountSet(
 		tx.SetAddress(asAccount),
 		tx.SetSequence(*accountInfo.AccountData.Sequence),
 		tx.SetLastLedgerSequence(accountInfo.LedgerSequence+LedgerSequenceInterval),
 		tx.SetFee(12),
-		tx.AddMemo(memo), // TODO support multiple memo fields
+		tx.AddMemo(memoFlag), // TODO support multiple memo fields
 		tx.AddMemo(memohex),
-		//tx.AddMemo(asAccount),
-		tx.SetDomain(domain),
+		tx.SetDomain(domainFlag),
 		tx.SetCanonicalSig(true),
 	)
-	_ = memo
 
-	if err != nil {
-		s.Exit(err)
-	}
-
-	if glog.V(2) {
-		// Show in json format (debug)
-		j, _ := json.MarshalIndent(t, "", "\t")
-		log.Printf("Unsigned:\n%s\n", string(j))
-		// In case user in on a terminal, nice to have a clean line.
-		fmt.Fprintf(os.Stderr, "\n")
-	}
+	command.Check(err)
 
 	// marshall the tx to stdout pipeline
 	txs <- t
@@ -163,8 +123,7 @@ func (s *State) setCommand(fs *flag.FlagSet) {
 
 	// Wait for all output to be encoded
 	err = g.Wait()
-	if err != nil {
-		s.Exit(err)
-	}
+	command.Check(err)
 
+	return nil
 }

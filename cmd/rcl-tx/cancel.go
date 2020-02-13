@@ -1,15 +1,36 @@
+// Copyright (C) 2018-2020  David N. Cohen
+// This file is part of github.com/dncohen/rcl
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+// Opeation cancel
+//
+// Compose an RCL transaction to cancel an earlier offer.
+//
 package main
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"log"
 	"os"
 	"strconv"
 
 	"golang.org/x/sync/errgroup"
+	"src.d10.dev/command"
 
+	"github.com/dncohen/rcl/internal/cmd"
 	"github.com/dncohen/rcl/tx"
 	"github.com/dncohen/rcl/util/marshal"
 	"github.com/pkg/errors"
@@ -17,37 +38,39 @@ import (
 	"github.com/rubblelabs/ripple/websockets"
 )
 
-// Implements `cancel` subcommand of rcl-tx.
-// Cancels an earlier offer.
-
-func (s *State) cancel(args ...string) {
-
-	const help = `
-
-Cancel an offer to sell one asset or issuance for another.
-
-`
-
-	fs := flag.NewFlagSet("sell", flag.ExitOnError)
-	fs.Bool("all", false, "Cancel all outstanding offers for an account.")
-	s.ParseFlags(fs, args, help, "cancel <sequence> [<sequence> ...]")
-
-	s.cancelCommand(fs)
+func init() {
+	command.RegisterOperation(command.Operation{
+		Handler:     opCancel,
+		Name:        "cancel",
+		Syntax:      "cancel [-all] [<sequence> ...]",
+		Description: `Cancel an offer to sell one asset or issuance for another.`,
+	})
 }
 
-func (s *State) cancelCommand(fs *flag.FlagSet) {
-	log.SetPrefix(programName + " cancel: ")
+func opCancel() error {
 
-	// command line args
-	all := boolFlag(fs, "all")
-	args := fs.Args()
-	if !all && len(args) < 1 {
-		s.Exitf(intro)
+	allFlag := command.OperationFlagSet.Bool("all", false, "Cancel all outstanding offers for an account.")
+
+	// parse flags
+	err := command.ParseOperationFlagSet()
+	if err != nil {
+		return err
 	}
+
+	argument := command.OperationFlagSet.Args()
+
+	if len(argument) == 0 && !*allFlag {
+		return errors.New("expected sequence number of offer to cancel (or -all flag)")
+	}
+
+	if *asFlag == "" {
+		return errors.New("use -as <address> flag to specify an account.")
+	}
+
 	fail := false
 
 	seqs := make([]uint32, 0)
-	for _, arg := range args {
+	for _, arg := range argument {
 		i, err := strconv.Atoi(arg)
 		if err != nil {
 			fmt.Printf("Expected account sequence number, got %s: %s", arg, err)
@@ -59,51 +82,26 @@ func (s *State) cancelCommand(fs *flag.FlagSet) {
 		seqs = append(seqs, uint32(i))
 	}
 
-	// Honor -as command flag
-	/* now in main.go...
-	if asAccount == nil {
-		originatorAddress := config.GetAccount()
-		if originatorAddress == "" {
-			log.Println("No source account found in rcl.cfg.")
-			fail = true
-		}
-		var err error
-		asAccount, err = data.NewAccountFromAddress(originatorAddress)
-		if err != nil {
-			log.Printf("Bad originator address \"%s\": %s\n", originatorAddress, err)
-			fail = true
-		}
-	}
-	*/
-	if asAccount == nil {
-		fail = true
-		fmt.Println("Use -as <address> flag to specify an account.")
-		usageAndExit(flag.CommandLine)
-	}
-
 	if fail {
-		s.ExitNow()
+		command.Check(errors.New("correct errors and try again"))
 	}
 
-	rippled := config.GetRippled()
-	if rippled == "" {
-		log.Println("No rippled URL found in rcl.cfg.")
-		s.ExitNow()
-	}
+	rippled, err := cmd.Rippled()
+	command.Check(err)
 
 	remote, err := websockets.NewRemote(rippled)
 	if err != nil {
-		s.Exit(errors.Wrapf(err, "Failed to connect to %s", rippled))
+		command.Check(fmt.Errorf("failed to connect to %q: %w", rippled, err))
 	}
 	defer remote.Close()
 
-	log.Printf("Connected to %s\n", rippled) // debug
+	command.V(1).Infof("Connected to %s\n", rippled) // debug
 
-	if all {
+	if *allFlag {
 		// Cancel all of an account's outstanding offers.
 		result, err := remote.AccountOffers(*asAccount, "current")
 		if err != nil {
-			s.Exit(errors.Wrapf(err, "account_offers failed for %s", asAccount))
+			command.Check(fmt.Errorf("account_offers failed for %s: %w", asAccount, err))
 		}
 		for _, offer := range result.Offers {
 			seqs = append(seqs, offer.Sequence)
@@ -111,12 +109,10 @@ func (s *State) cancelCommand(fs *flag.FlagSet) {
 	}
 
 	if len(seqs) < 1 {
-		log.Println("No offers - nothing to do.")
-		s.ExitNow()
+		command.Check(errors.New("No offers - nothing to do."))
 	}
 
-	// TODO confirm
-	log.Printf("Cancel %d offer(s) by %s...\n", len(seqs), asAccount)
+	command.Infof("Cancel %d offer(s) by %s...\n", len(seqs), asAccount)
 
 	// account_info returns ledger_current_index,
 	// which allows us to compute a LastLedgerSequence.
@@ -131,7 +127,7 @@ func (s *State) cancelCommand(fs *flag.FlagSet) {
 		var err error
 		accountInfo, err = remote.AccountInfo(*asAccount)
 		if err != nil {
-			log.Printf("Failed to get account_info %s: %s", asAccount, err)
+			command.Errorf("Failed to get account_info %s: %s", asAccount, err)
 			return err
 		}
 		return nil
@@ -149,10 +145,9 @@ func (s *State) cancelCommand(fs *flag.FlagSet) {
 			return nil
 		})
 	*/
+
 	err = g.Wait()
-	if err != nil {
-		s.Exit(err)
-	}
+	command.Check(err)
 
 	// Prepare to encode transaction output.
 	txs := make(chan (data.Transaction))
@@ -172,8 +167,7 @@ func (s *State) cancelCommand(fs *flag.FlagSet) {
 			tx.SetCanonicalSig(true),
 		)
 		if err != nil {
-			log.Printf("Failed to prepare OfferCancel: %s", err)
-			s.Exit(err)
+			command.Check(fmt.Errorf("failed to prepare OfferCancel: %w", err))
 		}
 		sequence++
 		// TODO: is it necessary to clean up the hash that rubblelabs puts into unsigned tx?
@@ -194,8 +188,8 @@ func (s *State) cancelCommand(fs *flag.FlagSet) {
 
 	// Wait for all output to be encoded
 	err = g.Wait()
-	if err != nil {
-		s.Exit(err)
-	}
+	command.Check(err)
+
+	return nil
 
 }
