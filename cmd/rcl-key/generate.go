@@ -1,44 +1,38 @@
+// Copyright (C) 2019-2020  David N. Cohen
+// This file is part of github.com/dncohen/rcl
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+// Command RCL-key - Operation Generate
+//
+// Generate new keypairs and addresses for use on the Ripple Consensus Ledger.
+//
+// Generated keys are saved to a file named 'rcl-key-<address>.cfg'.
+// The file is not encrypted, so handle with care.
 package main
 
 import (
-	"bufio"
 	"crypto/rand"
-	"flag"
 	"fmt"
 	"log"
-	"os"
 	"regexp"
+	"runtime"
 	"time"
 
-	"github.com/go-ini/ini"
-	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
+	"src.d10.dev/command"
 )
-
-func (s *State) generate(args ...string) {
-	const help = `
-
-Generate new keypairs and addresses for use on the Ripple Consensus
-Ledger.
-
-Generated keys are saved (unencrypted) to a file named
-'rcl-key-<address>.cfg'.  The file is not encrypted, so handle with
-care.
-
-`
-
-	fs := flag.NewFlagSet("generate", flag.ExitOnError)
-	fs.Int("n", 1, "Number of keypairs to generate.")
-	fs.String("vanity", "", "Optional regular expression to match.")
-	fs.String("nickname", "", "Give generated address a nickname.")
-
-	// TODO curve
-
-	s.ParseFlags(fs, args, help, "generate [-n=<int>] [-vanity=<regex>] [-nickname=<nick>]")
-
-	s.generateCommand(fs)
-
-}
 
 type key struct {
 	seed     data.Seed
@@ -88,131 +82,121 @@ func generate(keyType data.KeyType, seq *uint32) (key, error) {
 	return key, nil
 }
 
-func (s *State) generateCommand(fs *flag.FlagSet) {
-	log.SetPrefix(programName + " generate: ")
-
-	vanity := stringFlag(fs, "vanity")
-	nickname := stringFlag(fs, "nickname")
-
-	count := intFlag(fs, "n")
-	if count <= 0 {
-		s.Exitf("count parameter (%d) should be 1 or more.", count)
-	}
-
-	tolerance := 1 * time.Minute // How long to allow without a match.
-
-	/* TODO
-		chanCache := 0
-		procs := 1
-	  cpu := 1
-		if count > 1 || vanity != "" {
-			// When generating multiple or searching for vanity, spawn multiple threads.
-			chanCache = 1000
-			procs = runtime.GOMAXPROCS(runtime.NumCPU())
-	    cpu = runtime.NumCPU()
-		}
-	*/
-
-	// We will use goroutines to generate, in case n > 1,
-	matched := make(chan key, 0)
-	unmatched := matched // if no vanity, we only need one channel.
-
-	if vanity != "" {
-		// Only generate addresses that match regexp.
-		exp, err := regexp.Compile(vanity)
-		if err != nil {
-			s.Exitf("Bad vanity expression \"%s\": %s", vanity, err)
-		}
-
-		// This channel will hold the keys that may or may not match.
-		unmatched = make(chan key, 0)
-
-		// Attempted to match all generated addresses.
-		go func(in, out chan key) {
-			for {
-				select {
-				case key := <-in:
-					if exp.MatchString(key.account.String()) {
-						out <- key
-					}
-				}
-			}
-		}(unmatched, matched)
-	}
-
-	go func(out chan key) {
-		for {
-			seq := uint32(0)
-			key, err := generate(data.ECDSA, &seq)
-			if err != nil {
-				log.Panic(err)
-			}
-			out <- key
-		}
-	}(unmatched)
-
-	for i := 0; i < count; i++ {
-		select {
-		case key := <-matched:
-
-			if nickname != "" {
-				if count == 1 {
-					key.nickname = nickname
-				} else {
-					key.nickname = fmt.Sprintf("%s-%d", nickname, i+1)
-				}
-			}
-
-			// Save to disk before displaying the address
-			filename := fmt.Sprintf("rcl-key-%s.cfg", key.account)
-			err := key.save(filename)
-			if err != nil {
-				log.Panic(errors.Wrapf(err, "Failed to save secret to file \"%s\"", filename))
-			} else {
-				log.Printf("generated %s, secret saved to %s\n", key.account, filename)
-			}
-
-		case <-time.After(tolerance):
-			s.Exitf("Waited %s for vanity match. Giving up!", tolerance)
-		}
-
-	}
-
+func init() {
+	command.RegisterOperation(command.Operation{
+		Handler:     opGenerate,
+		Name:        "generate",
+		Syntax:      "generate [-n=<int>] [-vanity=<regex>] [-nickname=<nick>]",
+		Description: `Operation "generate" creates a new RCL address with signing key.`,
+	})
 }
 
-func (key key) save(filename string) error {
+func opGenerate() error {
 
-	hash, err := key.seed.Hash() // "hash" is the secret.
-	if err != nil {
-		return err // Should never be reached.
-	}
+	nFlag := command.OperationFlagSet.Int("n", 1, "Number of keypairs to generate.")
+	vanityFlag := command.OperationFlagSet.String("vanity", "", "Optional regular expression to match.")
+	nicknameFlag := command.OperationFlagSet.String("nickname", "", "Give generated address a nickname.")
 
-	cfg := ini.Empty()
-	sec, err := cfg.NewSection(key.account.String())
-	if err != nil {
-		return err
-	}
-	sec.NewKey("secret", hash.String())
-	if key.keyType == data.ECDSA {
-		sec.NewKey("type", "ecdsa")
-		sec.NewKey("sequence", fmt.Sprintf("%d", *key.seq))
-	} else {
-		log.Panicf("key type %s not yet supported", key.keyType)
-	}
+	// TODO(dnc): choose any supported curve
 
-	if key.nickname != "" {
-		sec.NewKey("nickname", key.nickname)
-	}
-
-	// Create read-only file.
-	f, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0400)
+	err := command.ParseOperationFlagSet()
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 
-	w := bufio.NewWriter(f)
-	defer w.Flush()
-	_, err = cfg.WriteToIndent(w, "\t")
-	return err
+	if *nFlag <= 0 {
+		return fmt.Errorf("count parameter (%d) must be positive number", *nFlag)
+	}
+
+	matched := make(chan *Key, 0) // addresses that match vanity expression
+	unmatched := matched          // same channel if vanityFlag empty
+
+	discards := 0
+	pairs := 0
+	timeouts := 0
+	saves := 0
+
+	if *vanityFlag != "" {
+		exp, err := regexp.Compile(*vanityFlag)
+		command.Check(err)
+		command.V(1).Infof("Attempting to generate %d address matching %q.", *nFlag, *vanityFlag)
+
+		// prepare to filter matches
+		unmatched = make(chan *Key, *nFlag)
+		go func() {
+			for k := range unmatched {
+				if exp.MatchString(k.Account.String()) {
+					matched <- k
+				} else {
+					discards++
+				}
+			}
+			close(matched)
+		}()
+	}
+
+	// generate key(s)
+	for i := 0; i < runtime.NumCPU(); i++ {
+		// start a worker
+		go func() {
+			for saves < *nFlag {
+
+				seq := uint32(0)
+				key, err := generate(data.ECDSA, &seq)
+				command.Check(err)
+				pairs++
+				hash, err := key.seed.Hash()
+				if err != nil {
+					command.Error(err) // reached?
+					continue
+				}
+				unmatched <- &Key{Account: key.account, Secret: hash.String()}
+			}
+			log.Println("worker exiting") // debug
+		}()
+	}
+
+	timeout := 1 * time.Minute
+
+	for saves < *nFlag {
+		select {
+		case k := <-matched:
+			if saves >= *nFlag {
+				command.Infof("extra key generated (not saved)") // debug
+				continue
+			}
+
+			if *nicknameFlag != "" {
+				if *nFlag == 1 {
+					k.Nickname = *nicknameFlag
+				} else {
+					k.Nickname = fmt.Sprintf("%s-%d", *nicknameFlag, saves+1)
+				}
+			}
+
+			// save the private key
+			filename := fmt.Sprintf("%s.rcl-key", k.Account)
+			err := SaveKeyToFile(k, filename)
+			command.Check(err)
+			command.Infof("Saved private key: %s", filename)
+			saves++
+
+		case <-time.After(timeout):
+			// attempt to detect unmatchable regexp
+			timeouts++
+			if saves == 0 {
+				command.Infof("No matches (%q) in %s.", *vanityFlag, time.Duration(timeouts)*timeout)
+				if timeouts >= 5 {
+					command.Check(fmt.Errorf("Giving up: no matches for %s", time.Duration(timeouts)*timeout))
+				}
+			} else {
+				command.Infof("after %s, saved %d; unmatched %d of %d generated", timeout, saves, discards, pairs)
+			}
+		}
+	}
+	defer close(unmatched) // defer to avoid send on closed channel
+
+	command.Infof("Saved %d keys, discarded %d of %d generated.", saves, discards, pairs)
+
+	return nil
 }
