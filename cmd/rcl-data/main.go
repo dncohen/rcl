@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+// Command RCL-data
+//
 // The rcl-data command retrieves historical data from
 // data.ripple.com/v2/... and displays information about accounts on
 // the Ripple Consensus Ledger.
@@ -55,7 +57,7 @@ import (
 
 func main() {
 	command.RegisterCommand(command.Command{
-		Application: "rcl-data",
+		Application: "rcl",
 		Description: "Inspect historical Ripple Consensus Ledger activity.",
 	})
 
