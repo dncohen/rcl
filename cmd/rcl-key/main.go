@@ -1,4 +1,4 @@
-// Copyright (C) 2019  David N. Cohen
+// Copyright (C) 2019-2020  David N. Cohen
 // This file is part of github.com/dncohen/rcl
 //
 // This program is free software: you can redistribute it and/or modify
