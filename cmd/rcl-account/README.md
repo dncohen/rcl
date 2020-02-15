@@ -1,4 +1,4 @@
-## Command RCL-account
+## Command rcl-account
 
 Inspect RCL accounts.
 
