@@ -30,6 +30,8 @@ import (
 	"github.com/rubblelabs/ripple/data"
 )
 
+var emptyHash = data.Hash256{}
+
 func DecodeInput(c chan data.Transaction, r io.Reader) error {
 	dec := json.NewDecoder(r)
 
@@ -46,6 +48,11 @@ func DecodeInput(c chan data.Transaction, r io.Reader) error {
 				break
 			}
 			return err
+		}
+
+		// TODO(dnc): try to eliminate unwanted empty hash when tx unsigned
+		if tx.Transaction.GetBase().Hash == emptyHash {
+			//tx.Transaction.GetBase().Hash = nil
 		}
 
 		c <- tx.Transaction // empty metadata discarded here
