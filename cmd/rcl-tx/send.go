@@ -171,7 +171,7 @@ func opSend() error {
 	err = g.Wait()
 	command.Check(err)
 
-	command.Infof("Prepared unsigned %s from %s to %s.\n", tx.GetType(), tx.Account, tx.Destination)
+	command.V(1).Infof("Prepared unsigned %s from %s to %s.\n", tx.GetType(), tx.Account, tx.Destination)
 
 	return nil
 }
