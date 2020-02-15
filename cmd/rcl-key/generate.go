@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// Command RCL-key - Operation Generate
+// Command rcl-key - Operation generate
 //
 // Generate new keypairs and addresses for use on the Ripple Consensus Ledger.
 //
@@ -30,6 +30,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
 	"src.d10.dev/command"
 )
@@ -42,9 +43,28 @@ type key struct {
 	nickname string
 }
 
-func generate(keyType data.KeyType, seq *uint32) (key, error) {
+func newKey(secret string) (*key, error) {
+	seed, err := data.NewSeedFromAddress(secret) // assuming the "Address" is a typo in "NewSeedFromAddress
+	if err != nil {
+		return nil, err
+	}
 
-	key := key{
+	// TODO(dnc): support all key types
+	typ := data.ECDSA
+	seq := uint32(0)
+	acc := seed.AccountId(typ, &seq)
+
+	return &key{
+		seed:    *seed,
+		keyType: typ,
+		seq:     &seq,
+		account: acc,
+	}, nil
+}
+
+func generate(keyType data.KeyType, seq *uint32) (*key, error) {
+
+	key := &key{
 		keyType: keyType,
 		seq:     seq,
 	}
@@ -96,6 +116,7 @@ func opGenerate() error {
 	nFlag := command.OperationFlagSet.Int("n", 1, "Number of keypairs to generate.")
 	vanityFlag := command.OperationFlagSet.String("vanity", "", "Optional regular expression to match.")
 	nicknameFlag := command.OperationFlagSet.String("nickname", "", "Give generated address a nickname.")
+	secretFlag := command.OperationFlagSet.String("secret", "", "Use existing secret, instead of generating a new one")
 
 	// TODO(dnc): choose any supported curve
 
@@ -106,6 +127,10 @@ func opGenerate() error {
 
 	if *nFlag <= 0 {
 		return fmt.Errorf("count parameter (%d) must be positive number", *nFlag)
+	}
+
+	if *secretFlag != "" && *nFlag != 1 {
+		return errors.New("when -secret flag is present, -n flag must be one.")
 	}
 
 	matched := make(chan *Key, 0) // addresses that match vanity expression
@@ -140,10 +165,16 @@ func opGenerate() error {
 		// start a worker
 		go func() {
 			for saves < *nFlag {
-
-				seq := uint32(0)
-				key, err := generate(data.ECDSA, &seq)
+				var key *key
+				var err error
+				if *secretFlag != "" {
+					key, err = newKey(*secretFlag)
+				} else {
+					seq := uint32(0)
+					key, err = generate(data.ECDSA, &seq)
+				}
 				command.Check(err)
+
 				pairs++
 				hash, err := key.seed.Hash()
 				if err != nil {
