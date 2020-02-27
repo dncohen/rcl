@@ -2,6 +2,8 @@ package rippledata
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -22,7 +24,7 @@ func NewClient(base string) (Client, error) {
 	var err error
 
 	tr := http.Transport{
-	//TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure},
+		//TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure},
 	}
 	httpClient := http.Client{Transport: &tr}
 
@@ -53,9 +55,10 @@ func (this Client) Endpoint(segment ...string) *url.URL {
 
 var getError = errors.New("GET failed")
 
-// Retry requests, because ripple data has trouble, pretty often.
+// Get method submits a query to the Ripple Data API and returns response.  If a request fails, Get retries, possibly several times.
 func (this Client) Get(response DataResponse, endpoint *url.URL, values *url.Values) error {
 	count := 0
+	// retry several times if necessary, because data api is intermittently unavailable
 	for {
 		count++
 		err := this.get(response, endpoint, values)
@@ -81,34 +84,48 @@ func (this Client) get(response DataResponse, endpoint *url.URL, values *url.Val
 	}
 	defer res.Body.Close()
 
-	//response, err := decodeResponse(res)
-
-	var raw json.RawMessage
-	err = json.NewDecoder(res.Body).Decode(&raw)
+	err = unmarshal(response, res.Body)
 	if err != nil {
-		err = errors.Wrapf(err, "GET %s could not decode response", endpoint)
-		//q.Q(err, string(raw)) // debug
+		return fmt.Errorf("GET %s: %w", endpoint, err)
+	}
+	return nil
+}
+
+func unmarshal(response DataResponse, r io.Reader) error {
+
+	type triager interface {
+		triage(json.RawMessage) json.RawMessage
+	}
+	type postoper interface {
+		postop()
+	}
+
+	// keep the raw, for decoding that may be tricky depending on the endpoint
+	var raw json.RawMessage
+	err := json.NewDecoder(r).Decode(&raw)
+	if err != nil {
+		return err
 	}
 
 	// Now get the result from the raw
 	response.setRaw(raw)
 
+	triage, ok := response.(triager)
+	if ok {
+		raw = triage.triage(raw) // kludge to align what Data API returns to be more like what rippled API returns
+	}
+
 	err = json.Unmarshal(raw, response)
 	if err == nil && response.GetResult() != "success" {
-		err = errors.Wrapf(getError, "GET %s returned %s: %s", endpoint.String(), response.GetResult(), response.GetMessage())
-		//q.Q(err, string(raw)) // debug
+		return fmt.Errorf("result %q, response %q", response.GetResult(), response.GetMessage())
+	}
+
+	postop, ok := response.(postoper)
+	if ok {
+		postop.postop()
 	}
 
 	return err
-}
-
-type Response struct {
-	Result  string `json:"result"`            // "success" expected
-	Message string `json:"message,omitempty"` // present when  "result": "error"
-
-	// When unmarshalling, save the raw bytes for further unmarshalling
-	// into type-specific structs.
-	raw json.RawMessage
 }
 
 type DataResponse interface {
@@ -116,6 +133,16 @@ type DataResponse interface {
 	setRaw(json.RawMessage)
 	GetResult() string
 	GetMessage() string
+}
+
+// Response is a generic response to a Data API request.
+type Response struct {
+	Result  string `json:"result"`            // "success" expected
+	Message string `json:"message,omitempty"` // present when  "result": "error"
+
+	// When unmarshalling, save the raw bytes for further unmarshalling
+	// into type-specific structs.
+	raw json.RawMessage
 }
 
 func (this *Response) getRaw() json.RawMessage {
@@ -129,11 +156,6 @@ func (this *Response) GetResult() string {
 }
 func (this *Response) GetMessage() string {
 	return this.Message
-}
-
-func decodeResponse(res *http.Response) (*Response, error) {
-	//response := Response{}
-	return nil, errors.New("decodeResponse deprecated / not implemented")
 }
 
 /*

@@ -1,127 +1,149 @@
+// Copyright (C) 2018-2020  David N. Cohen
+// This file is part of github.com/dncohen/rcl
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+// Command RCL-account - Operation Show
+//
+//    rcl-account show <address> [<address> ...]
+//
+// Prints in human-readable format the balances of one or more accounts.
 package main
 
 import (
-	"flag"
+	"errors"
 	"fmt"
-	"log"
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"text/tabwriter"
 
 	"golang.org/x/sync/errgroup"
+	"src.d10.dev/command"
 
+	"github.com/dncohen/rcl/internal/cmd"
 	"github.com/rubblelabs/ripple/data"
 	"github.com/rubblelabs/ripple/websockets"
 )
 
-func (s *State) show(args ...string) {
-	const help = `
-
-Show current settings and balances for accounts on the Ripple Consensus Ledger.
-
-`
-
-	// subcommand-specific flags
-	fs := flag.NewFlagSet("show", flag.ExitOnError)
-	fs.Int("ledger", 0, "Ledger sequence number to show. Defaults to most recent.")
-
-	s.ParseFlags(fs, args, help, "show [-ledger=<int>]")
-
-	s.showCommand(fs)
+func init() {
+	command.RegisterOperation(command.Operation{
+		Handler:     opShow,
+		Name:        "show",
+		Syntax:      "show [-ledger=<int>] <account> [...]",
+		Description: `Show current account balances.`,
+	})
 }
 
-func (s *State) showCommand(fs *flag.FlagSet) {
-	log.SetPrefix(programName + " show: ")
+func opShow() error {
 
-	rippled := config.Section("").Key("rippled").MustString("wss://s1.ripple.com:51233")
-	if rippled == "" {
-		s.Exitf("rippled websocket address not found in configuration file. Exiting.")
-	}
+	ledgerFlag := command.OperationFlagSet.Int("ledger", -1, "ledger sequence number to show; use -1 for most recent.")
 
-	accounts, err := accountsFromArgs(fs.Args())
-	if err != nil {
-		s.Exit(err)
-	}
-	if len(accounts) == 0 {
-		log.Println("No accounts specified")
-		s.ExitNow()
+	err := command.ParseOperationFlagSet()
+	command.CheckUsage(err)
+
+	rippled, err := cmd.Rippled()
+	command.Check(err)
+
+	// accept addresses or nicknames as arguments
+	account, err := cmd.ParseAccountArg(command.OperationFlagSet.Args())
+	command.Check(err)
+
+	if len(account) == 0 {
+		command.CheckUsage(errors.New("expected one or more addresses"))
 	}
 	//log.Printf("Showing %d accounts", len(accounts))
 
-	var ledger interface{} // fast and loose type definition.  Thanks, JSON.
-	ledgerArg := intFlag(fs, "ledger")
-	if ledgerArg == 0 {
+	var ledger interface{} // fast and loose type definition, brought to you by JSON
+
+	if *ledgerFlag == -1 {
 		ledger = "validated"
 	} else {
 
 		// TODO remote.AccountInfo does not yet support this.
-		s.Exitf("Currently only supporting 'validated' ledger.")
+		command.Check(errors.New("currently only supporting 'validated' ledger"))
 
-		ledger = uint32(ledgerArg)
+		ledger = uint32(*ledgerFlag)
 		// TODO check history includes ledger
 	}
 
 	remote, err := websockets.NewRemote(rippled)
 	if err != nil {
-		s.Exitf("Failed to connect to %s: %s", rippled, err)
+		command.Check(fmt.Errorf("Failed to connect to %s: %s", rippled, err))
 	}
 
 	// prepare to store data
-	linesResults := make(map[*data.Account]*websockets.AccountLinesResult)
-	accountResults := make(map[*data.Account]*websockets.AccountInfoResult)
-	offerResults := make(map[*data.Account]*websockets.AccountOffersResult)
+	mutex := &sync.Mutex{}
+	linesResults := make(map[data.Account]*websockets.AccountLinesResult)
+	accountResults := make(map[data.Account]*websockets.AccountInfoResult)
+	offerResults := make(map[data.Account]*websockets.AccountOffersResult)
 
 	g := new(errgroup.Group)
 
-	for _, acct := range accounts {
+	for _, acct := range account {
 		acct := acct // https://golang.org/doc/faq#closures_and_goroutines
 		g.Go(func() error {
 			// TODO handle results with marker!
-			result, err := remote.AccountLines(*acct, ledger)
+			result, err := remote.AccountLines(acct.Account, ledger)
 			if err != nil {
-				log.Printf("account_lines failed for %s (at ledger %s): %s", acct, ledger, err)
+				command.Errorf("account_lines failed for %s (at ledger %s): %s", acct, ledger, err)
 				return err
 			} else {
-				linesResults[acct] = result
+				mutex.Lock()
+				defer mutex.Unlock()
+
+				linesResults[acct.Account] = result
 				return nil
 			}
 		})
 
 		g.Go(func() error {
-			result, err := remote.AccountInfo(*acct)
+			result, err := remote.AccountInfo(acct.Account)
 			if err != nil {
-				log.Printf("account_info failed for %s: %s", acct, err)
+				command.Errorf("account_info failed for %s: %s", acct, err)
 				return err
 			} else {
-				accountResults[acct] = result
+				mutex.Lock()
+				defer mutex.Unlock()
+
+				accountResults[acct.Account] = result
 				return nil
 			}
 		})
 
 		g.Go(func() error {
-			result, err := remote.AccountOffers(*acct, ledger)
+			result, err := remote.AccountOffers(acct.Account, ledger)
 			if err != nil {
-				log.Printf("account_offers failed for %s: %s", acct, err)
+				command.Errorf("account_offers failed for %s: %s", acct, err)
 				return err
 			} else {
-				//q.Q(result) // debug
-				offerResults[acct] = result
+				mutex.Lock()
+				defer mutex.Unlock()
+
+				offerResults[acct.Account] = result
 				return nil
 			}
 		})
 	}
 	// Wait for all requests to complete
 	err = g.Wait()
-	if err != nil {
-		log.Println(err) // TODO handle better
-	}
+	command.Check(err)
 
 	// To render peer limit as negative number.
 	minusOne, err := data.NewValue("-1", false)
-	if err != nil {
-		log.Panic(err)
-	}
+	command.Check(err)
 
 	for key, accountResult := range accountResults {
 		account := accountResult.AccountData.Account
@@ -129,7 +151,7 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 		table := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.Debug)
 		fmt.Fprintln(table, "Account\t XRP\t Sequence\t Owner Count\t Ledger Index\t")
 		fmt.Fprintf(table, "%s\t %s\t %d\t %d\t %d\t\n",
-			config.FormatAccountName(*account),
+			cmd.FormatAccount(*account, nil),
 			accountResult.AccountData.Balance,
 			*accountResult.AccountData.Sequence,
 			*accountResult.AccountData.OwnerCount,
@@ -140,14 +162,12 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 
 		table = tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.DiscardEmptyColumns|tabwriter.Debug)
 		fmt.Fprintln(table, "Balances\t Amount\t Currency/Issuer\t Min\t Max\t rippling\t quality\t")
-		fmt.Fprintf(table, "%s\t %s\t %s\t\t\t\t\t\n", config.FormatAccountName(*account), accountResult.AccountData.Balance, "XRP")
+		fmt.Fprintf(table, "%s\t %s\t %s\t\t\t\t\t\n", cmd.FormatAccount(*account, nil), accountResult.AccountData.Balance, "XRP")
 		for _, line := range linesResults[key].Lines {
 			peerLimit, err := line.LimitPeer.Multiply(*minusOne)
+			command.Check(err)
 
-			if err != nil {
-				log.Panic(err)
-			}
-			fmt.Fprintf(table, "%s\t %s\t %s/%s\t %s\t %s\t %s\t %s\t\n", config.FormatAccountName(*account), line.Balance, line.Currency, line.Account, peerLimit, line.Limit, formatRipple(line), formatQuality(line))
+			fmt.Fprintf(table, "%s\t %s\t %s/%s\t %s\t %s\t %s\t %s\t\n", cmd.FormatAccount(*account, nil), line.Balance, line.Currency, line.Account, peerLimit, line.Limit, formatRipple(line), formatQuality(line))
 			//q.Q(line)
 		}
 		table.Flush()
@@ -160,13 +180,13 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 		account data.Account
 	}
 	byBook := make(map[string][][]mappedOffer)
-	for _, account := range accounts {
-		if offerResults[account] == nil {
+	for _, acct := range account {
+		if offerResults[acct.Account] == nil {
 			continue
 		}
 		book := ""
 		bidOrAsk := 0
-		for _, offer := range offerResults[account].Offers {
+		for _, offer := range offerResults[acct.Account].Offers {
 			// Choose a base for this order book.
 			bookOption1 := fmt.Sprintf("%s / %s", offer.TakerPays.Asset(), offer.TakerGets.Asset())
 			bookOption2 := fmt.Sprintf("%s / %s", offer.TakerGets.Asset(), offer.TakerPays.Asset())
@@ -190,7 +210,7 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 
 			byBook[book][bidOrAsk] = append(byType[bidOrAsk], mappedOffer{
 				offer:   offer,
-				account: *account,
+				account: acct.Account,
 			})
 		}
 	}
@@ -212,7 +232,7 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 			if row < len(book[0]) {
 				offer := book[0][row]
 				price := offer.offer.TakerGets.Ratio(offer.offer.TakerPays)
-				fmt.Fprintf(table, "%s (%d)\t %s\t %.4f\t", config.FormatAccountName(offer.account), offer.offer.Sequence, offer.offer.TakerPays, price.Float())
+				fmt.Fprintf(table, "%s (%d)\t %s\t %.4f\t", cmd.FormatAccount(offer.account, nil), offer.offer.Sequence, offer.offer.TakerPays, price.Float())
 			} else {
 				fmt.Fprintf(table, "n/a \t \t \t")
 			}
@@ -220,7 +240,7 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 			if row < len(book[1]) {
 				offer := book[1][row]
 				price := offer.offer.TakerPays.Ratio(offer.offer.TakerGets)
-				fmt.Fprintf(table, "%.4f\t %s\t %s (%d)\t\n", price.Float(), offer.offer.TakerGets, config.FormatAccountName(offer.account), offer.offer.Sequence)
+				fmt.Fprintf(table, "%.4f\t %s\t %s (%d)\t\n", price.Float(), offer.offer.TakerGets, cmd.FormatAccount(offer.account, nil), offer.offer.Sequence)
 			} else {
 				fmt.Fprintf(table, "\t \t n/a\t\n")
 			}
@@ -229,6 +249,7 @@ func (s *State) showCommand(fs *flag.FlagSet) {
 		table.Flush()
 		fmt.Println("") // blank line
 	}
+	return nil
 }
 
 func formatRipple(line data.AccountLine) string {

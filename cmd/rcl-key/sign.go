@@ -1,130 +1,131 @@
+// Copyright (C) 2019-2020  David N. Cohen
+// This file is part of github.com/dncohen/rcl
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+// Command rcl-key - Operation sign
+//
+// Sign command expects an encoded unsigned transaction via stdin, and
+// encodes a signed transaction to stdout.
 package main
 
 import (
-	"encoding/json"
-	"flag"
-	"io"
-	"log"
+	"fmt"
 	"os"
+	"path/filepath"
 
-	"golang.org/x/sync/errgroup"
+	"src.d10.dev/command"
 
+	"github.com/dncohen/rcl/internal/pipeline"
 	"github.com/dncohen/rcl/util"
-	"github.com/dncohen/rcl/util/marshal"
-	"github.com/golang/glog"
-	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
 )
 
-func (s *State) sign(args ...string) {
-	const help = `
+func init() {
+	command.RegisterOperation(command.Operation{
+		Handler:     opSign,
+		Name:        "sign",
+		Syntax:      "sign [<filename> ...]",
+		Description: `Sign RCL transaction(s).  When no filename provided, usnsigned transactions are read from stdin.  Signed transaction written to stdout.`,
+	})
+}
 
-Sign command expects an encoded unsigned transaction via stdin, and encodes a signed transaction to stdout.
-`
-
-	fs := flag.NewFlagSet("sign", flag.ExitOnError)
-	// Flags specific to this subcommand
-	fs.String("as", "", "Sign as address.  Allows for regular key signing.")
-	err := fs.Parse(args)
+func opSign() error {
+	err := command.ParseOperationFlagSet()
 	if err != nil {
-		s.Exit(err)
+		return err
 	}
 
-	s.signCommand(fs)
+	argument := command.OperationFlagSet.Args()
 
-}
+	unsignedIn := make(chan data.Transaction)
+	signedOut := make(chan data.Transaction)
 
-func getSigningKey(tx data.Transaction) (util.Keypair, error) {
-	// Config helper to read secrets from *.cfg files.
-	return config.GetAccountKeypair(tx.GetBase().Account)
-}
-
-func (s *State) signCommand(fs *flag.FlagSet) {
-	log.SetPrefix(programName + " sign: ")
-
-	// allow specification of regular key
-	var keypair util.Keypair
-	asAddress := stringFlag(fs, "as")
-
-	if asAddress != "" {
-		account, _, err := config.AccountFromArg(asAddress)
-		if err != nil {
-			s.Exit(errors.Wrapf(err, "bad account %s", asAddress))
-		}
-		keypair, err = config.GetAccountKeypair(*account)
-		if err != nil {
-			s.Exit(errors.Wrapf(err, "cannot sign as %s", asAddress))
-		}
-	}
-
-	// decode unsigned transactions from stdin
-	unsignedTransactions := make(chan (data.Transaction))
 	go func() {
-		err := marshal.DecodeTransactions(os.Stdin, unsignedTransactions)
-		if err != nil {
-			if err == io.EOF {
-				// Expected at end of input
-				// TODO: ensure there's been at least one
-			} else {
-				log.Println(err)
-				s.Exit(err)
-			}
-			close(unsignedTransactions)
+		// sign all transactions in the pipeline
+		for unsigned := range unsignedIn {
+			signed, err := sign(unsigned)
+			command.Check(err)
+			signedOut <- signed
 		}
+		close(signedOut)
 	}()
 
-	// encode signed transactions to stdout
-	var g errgroup.Group
-	signedTransactions := make(chan (data.Transaction))
-	g.Go(func() error {
-		return marshal.EncodeTransactions(os.Stdout, signedTransactions)
-	})
+	go func() {
+		// push incoming transaction onto pipeline
+		if len(argument) == 0 {
+			err := pipeline.DecodeInput(unsignedIn, os.Stdin)
+			command.Check(err)
+		} else {
+			// read files
+			for _, arg := range argument {
+				match, err := filepath.Glob(arg)
+				command.Check(err)
+				if len(match) == 0 {
+					command.Check(fmt.Errorf("expected transaction: file not found (%q)", arg))
+				}
+				for _, fname := range match {
 
-	// accept unsinged transactions from stdin
-	var err error
-	for tx := range unsignedTransactions {
-		if asAddress == "" {
-			keypair, err = getSigningKey(tx)
-			if err != nil {
-				s.Exit(errors.Wrapf(err, "Failed to determine signing key"))
+					func() { // for defer
+						f, err := os.Open(fname)
+						command.Check(err)
+						defer f.Close()
+
+						err = pipeline.DecodeInput(unsignedIn, f)
+						command.Check(err)
+					}()
+				}
 			}
+			// end of files
 		}
+		// files or stdin has been read
+		close(unsignedIn)
+	}()
 
-		if tx.GetBase().Account.String() != keypair.Address {
-			// Could be regular key or multisign, so this is not always an error.
-			glog.Infof("Transaction %s account %s differs from signing key %s.\n", tx.GetType(), tx.GetBase().Account, keypair.Address)
-		}
+	// the goroutines (above) produce signed transactions.  here we write them to stdout
+	err = pipeline.EncodeOutput(os.Stdout, signedOut)
+	command.Check(err)
 
-		// TODO show user tx details and prompt to continue.
+	return nil
+}
 
-		// Sign the transaction.
-		err = keypair.Sign(tx)
-		if err != nil {
-			s.Exit(errors.Wrapf(err, "failed to sign transaction"))
-		}
-		if glog.V(2) {
-			glog.Infof("%s %s signed by %s.\n", tx.GetType(), tx.GetHash(), keypair.Address)
+var keycache = make(map[data.Account]*Key)
 
-			// Show the signed tx in JSON format (verbose debug)
-			jb, err := json.MarshalIndent(tx, "", "\t")
-			if err != nil {
-				glog.Errorln("Failed to JSON-encode signed transaction: ", err)
-			} else {
-				glog.Infof("Signed transaction JSON: \n%s\n", string(jb))
-			}
-		}
-
-		// Write to output
-		signedTransactions <- tx
+func sign(unsigned data.Transaction) (data.Transaction, error) {
+	var signer data.Account
+	if *asFlag != "" {
+		signer = *asAccount
+	} else {
+		// learn signer from transaction
+		signer = unsigned.GetBase().Account
 	}
 
-	// This close cannot be defered because encode goroutine will not complete.
-	close(signedTransactions)
+	k, ok := keycache[signer]
+	if !ok {
+		// TODO(dnc): check current directory and also config directory.
+		filename := fmt.Sprintf("%s.rcl-key", signer)
+		k = &Key{}
+		err := ReadKeyFromFile(k, filename)
+		command.Check(err)
+		keycache[signer] = k // cache for signing multiple tx
+	}
 
-	// Wait for all output to be encoded.
-	err = g.Wait()
+	kp, err := util.NewEcdsaFromSecret(k.Secret)
 	if err != nil {
-		s.Exit(err)
+		return nil, err
 	}
 
+	err = kp.Sign(unsigned)
+	return unsigned, err
 }

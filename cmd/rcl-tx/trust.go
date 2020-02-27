@@ -1,90 +1,102 @@
+// Copyright (C) 2018-2020  David N. Cohen
+// This file is part of github.com/dncohen/rcl
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+// Operation trust
+//
+// Create or modify a trust line.
+//
 package main
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"log"
 	"os"
 
 	"golang.org/x/sync/errgroup"
+	"src.d10.dev/command"
 
+	"github.com/dncohen/rcl/internal/cmd"
+	"github.com/dncohen/rcl/internal/pipeline"
 	"github.com/dncohen/rcl/tx"
-	"github.com/dncohen/rcl/util/marshal"
 	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
 	"github.com/rubblelabs/ripple/websockets"
 )
 
-// Implements `trust` subcommand.  Create or modify a trust line.
-
-func (s *State) trust(args ...string) {
-
-	const help = `
-
-Create or modify a trust line.
-
-`
-
-	fs := flag.NewFlagSet("trust", flag.ExitOnError)
-
-	fs.Bool("ripple", false, "Allow rippling on account side of trustline.  Defaults to false which means disallow rippling.")
-	fs.Bool("authorize", false, "Authorize trustline.  Defaults to false which means make no change to current authorization.")
-	// TODO quality, rippling
-	s.ParseFlags(fs, args, help, "trust <amount>")
-
-	s.trustCommand(fs)
+func init() {
+	command.RegisterOperation(command.Operation{
+		Handler:     opTrust,
+		Name:        "trust",
+		Syntax:      "trust [ripple=<true or false>] [authorize=<true or false>] <amount>",
+		Description: `Create or modify a trust line.`,
+	})
 }
 
-func (s *State) trustCommand(fs *flag.FlagSet) {
-	log.SetPrefix(programName + " trust: ")
+func opTrust() error {
 
-	//log.Println(fs.Args()) // debug
+	rippleFlag := command.OperationFlagSet.Bool("ripple", false, "allow rippling on account side of trustline, if true; disallow if false")
+	authorizeFlag := command.OperationFlagSet.Bool("authorize", false, "if true, set authorize flag on account side of trustline; if false, make no change to authorization flag")
 
-	// command line flags
-	allowRipple := boolFlag(fs, "ripple")
-	_ = allowRipple // TODO XXX
+	// TODO quality
 
-	// command line args
-	args := fs.Args()
+	command.CheckUsage(command.ParseOperationFlagSet())
+
+	// TODO!
+	if *rippleFlag || *authorizeFlag {
+		command.Check(errors.New("ripple flag and authorize flag not yet supported (sorry)"))
+	}
+
+	argument := command.OperationFlagSet.Args()
+	if len(argument) != 1 {
+		// TODO(dnc): is this required when authorizing?
+		command.CheckUsage(errors.New("operation requires amount of trust line"))
+	}
 	fail := false
 
-	amount, err := data.NewAmount(args[0])
+	amount, err := cmd.AmountFromArg(argument[0])
 	if err != nil {
-		log.Printf("Expected amount, got \"%s\" (%s)\n", args[1], err)
+		command.Errorf("bad amount (%q): %w", argument[0], err)
 		fail = true
 	} else if amount.IsNative() {
-		log.Printf("Unxpected amount \"%s\".  Cannot set trust for XRP.\n", amount)
+		command.Errorf("bad amount (%q): cannot set trust for XRP", amount)
 		fail = true
 	}
 
 	if asAccount == nil {
 		fail = true
-		fmt.Println("Use -as <address> flag to specify an account.")
-		usageAndExit(flag.CommandLine)
+		command.Errorf("operation requires -as <address> flag")
 	}
 
 	if fail {
-		s.ExitNow()
+		command.Exit()
 	}
 
 	// TODO confirm
-	log.Printf("Set trust %s ---> %s\n", asAccount, amount)
+	command.Infof("Set trust %s ---> %s\n", asAccount, amount)
 
-	rippled := config.GetRippled()
-	if rippled == "" {
-		log.Println("No rippled URL found in .cfg.")
-		fail = true
-	}
+	rippled, err := cmd.Rippled()
+	command.Check(err)
 
 	// Learn the needed detail of the account setting the line.
 	remote, err := websockets.NewRemote(rippled)
-	if err != nil {
-		s.Exit(errors.Wrapf(err, "Failed to connect to %s", rippled))
-	}
+	command.Check(fmt.Errorf("failed to connect to %q: %w", rippled, remote))
 	defer remote.Close()
 
-	log.Printf("Connected to %s\n", rippled) // debug
+	command.Infof("connected to %q", rippled) // verbose
 
 	// Interestingly, rubblelabs commands do not support server_info!
 	// As it happens, the account_info returns ledger_current_index,
@@ -99,8 +111,7 @@ func (s *State) trustCommand(fs *flag.FlagSet) {
 		var err error
 		accountInfo, err = remote.AccountInfo(*asAccount)
 		if err != nil {
-			log.Printf("Failed to get account_info %s: %s", asAccount, err)
-			return err
+			return fmt.Errorf("failed to get account_info %s: %w", asAccount, err)
 		}
 		return nil
 	})
@@ -119,14 +130,12 @@ func (s *State) trustCommand(fs *flag.FlagSet) {
 			})
 	*/
 	err = g.Wait()
-	if err != nil {
-		s.Exit(err)
-	}
+	command.Check(err)
 
 	// Prepare to encode transaction output.
-	txs := make(chan (data.Transaction))
+	unsignedOut := make(chan (data.Transaction))
 	g.Go(func() error {
-		return marshal.EncodeTransactions(os.Stdout, txs)
+		return pipeline.EncodeOutput(os.Stdout, unsignedOut)
 	})
 
 	// Prepare a TrustSet transaction.
@@ -138,6 +147,10 @@ func (s *State) trustCommand(fs *flag.FlagSet) {
 		tx.SetLimitAmount(*amount),
 		// TODO flags
 		// TODO qualityin, qualityout
+
+		tx.AddMemo(memoFlag), // TODO support multiple memo fields
+		tx.AddMemo(memohex),
+
 		tx.SetCanonicalSig(true),
 	)
 
@@ -151,12 +164,13 @@ func (s *State) trustCommand(fs *flag.FlagSet) {
 	fmt.Fprintf(os.Stderr, "\n")
 
 	// marshall the tx to stdout pipeline
-	txs <- t
-	close(txs)
+	unsignedOut <- t
+	close(unsignedOut)
 
 	// Wait for all output to be encoded
 	err = g.Wait()
-	if err != nil {
-		s.Exit(err)
-	}
+	command.Check(err)
+
+	return nil
+
 }

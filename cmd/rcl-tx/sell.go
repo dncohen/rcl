@@ -1,94 +1,102 @@
+// Copyright (C) 2018-2020  David N. Cohen
+// This file is part of github.com/dncohen/rcl
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+// Operation sell
+//
+// Create an offer to sell one asset or issuance for another.
+//
 package main
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"log"
 	"os"
 
 	"golang.org/x/sync/errgroup"
+	"src.d10.dev/command"
 
+	"github.com/dncohen/rcl/internal/cmd"
+	"github.com/dncohen/rcl/internal/pipeline"
 	"github.com/dncohen/rcl/tx"
-	"github.com/dncohen/rcl/util/marshal"
 	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
 	"github.com/rubblelabs/ripple/websockets"
 )
 
-// Implements `sell` subcommand of rcl-tx.  Creates an offer to sell
-// one asset/issuance for another.
-
-func (s *State) sell(args ...string) {
-
-	const help = `
-
-Create an offer to sell one asset or issuance for another.
-
-`
-
-	fs := flag.NewFlagSet("sell", flag.ExitOnError)
-
-	s.ParseFlags(fs, args, help, "sell <amount> for <amount>")
-
-	s.sellCommand(fs)
+func init() {
+	command.RegisterOperation(command.Operation{
+		Handler:     opSell,
+		Name:        "sell",
+		Syntax:      "sell <amount> for <amount>",
+		Description: `Create an offer to sell one asset or issuance for another.`,
+	})
 }
 
-func (s *State) sellCommand(fs *flag.FlagSet) {
-	log.SetPrefix(programName + " sell: ")
+func opSell() error {
 
-	log.Println(fs.Args()) // debug
+	command.CheckUsage(command.ParseOperationFlagSet())
 
-	// command line args
-	args := fs.Args()
-	if len(args) < 3 {
-		s.Exitf(intro)
+	argument := command.OperationFlagSet.Args()
+
+	if len(argument) < 3 {
+		command.CheckUsage(errors.New("expected arguments: <amount-to-sell> for <amount-to-accrue>"))
 	}
+
 	fail := false
-	takerGets, err := data.NewAmount(args[0])
+
+	takerGets, err := data.NewAmount(argument[0])
 	if err != nil {
-		log.Printf("Expected amount to sell, got \"%s\" (%s)\n", args[0], err)
+		command.Errorf("bad amount to sell (%q): %s", argument[0], err)
 		fail = true
 	}
 
-	takerPays, err := data.NewAmount(args[2])
+	takerPays, err := data.NewAmount(argument[2])
 	if err != nil {
-		log.Printf("Expected 'taker pays' amount, got \"%s\" (%s)\n", args[1], err)
+		command.Errorf("bad amount to accrue (%q): %s", argument[2], err)
 		fail = true
 	}
 
 	// -as <account> is parsed in main.go
 	if asAccount == nil {
-		log.Println("Sell subcommand requires as account specified in configuration file or use `-as <account>` flag.")
+		command.Errorf("operation requires -as <account> flag")
 		fail = true
 	}
 
 	if fail {
-		s.ExitNow()
+		command.Exit()
 	}
 
 	// Make the user type "for", less likely to mistakenly reverse the amounts.
-	if args[1] != "for" {
-		log.Println("Expected `sell <amount> for <amount>`.")
-		s.ExitNow()
+	if argument[1] != "for" {
+		command.Check(errors.New("Expected `sell <amount> for <amount>`."))
 	}
 
-	// TODO confirm
-	log.Printf("Sell %s from %s in exchange for %s...\n", takerGets, asAccount, takerPays)
+	command.Infof("sell %s from %s in exchange for %s...\n", takerGets, asAccount, takerPays)
 
-	rippled := config.GetRippled()
-	if rippled == "" {
-		log.Println("No rippled URL found in rcl.cfg.")
-		s.ExitNow()
-	}
+	rippled, err := cmd.Rippled()
+	command.Check(err)
 
 	remote, err := websockets.NewRemote(rippled)
 	if err != nil {
-		s.Exit(errors.Wrapf(err, "Failed to connect to %s", rippled))
+		command.Check(fmt.Errorf("Failed to connect to %q: %w", rippled, err))
 	}
 	defer remote.Close()
 
-	log.Printf("Connected to %s\n", rippled) // debug
+	command.V(1).Infof("Connected to %q", rippled)
 
 	// account_info returns ledger_current_index,
 	// which allows us to compute a LastLedgerSequence.
@@ -104,7 +112,7 @@ func (s *State) sellCommand(fs *flag.FlagSet) {
 		var err error
 		accountInfo, err = remote.AccountInfo(*asAccount)
 		if err != nil {
-			log.Printf("Failed to get account_info %s: %s", asAccount, err)
+			command.Errorf("failed to get account_info %s: %s", asAccount, err)
 			return err
 		}
 		return nil
@@ -114,7 +122,7 @@ func (s *State) sellCommand(fs *flag.FlagSet) {
 		var err error
 		bookOffers, err = remote.BookOffers(*asAccount, "validated", *takerPays.Asset(), *takerGets.Asset())
 		if err != nil {
-			log.Printf("Failed to get book_offers: %s", err)
+			command.Errorf("Failed to get book_offers: %s", err)
 			return err
 		}
 		return nil
@@ -133,11 +141,10 @@ func (s *State) sellCommand(fs *flag.FlagSet) {
 		})
 	*/
 	err = g.Wait()
-	if err != nil {
-		s.Exit(err)
-	}
+	command.Check(err)
 
-	log.Printf("Order book has %d offers.\n", len(bookOffers.Offers)) // debug
+	command.V(1).Infof("order book has %d offers", len(bookOffers.Offers))
+
 	if len(bookOffers.Offers) > 0 {
 		// This is work in progress... to detect whether our order is far off the current order book.  TODO
 		top := bookOffers.Offers[0]
@@ -150,23 +157,20 @@ func (s *State) sellCommand(fs *flag.FlagSet) {
 		log.Printf("Our offer ratio: %s", ourRatio)
 
 		ratRatio, err := topRatio.Ratio(*ourRatio)
-		if err != nil {
-			s.Exit(err)
-		}
+		command.Check(err)
 		log.Printf("ratio of ratios: %s", ratRatio)
 
 		// TODO: inspect other side of order book and determine if offer will cross.
 		if ratRatio.Compare(one) > 0 {
-			log.Println("Placing offer at TOP of order book.")
+			command.Infof("placing offer at TOP of order book")
 		}
-		//q.Q(bookOffers.Offers[0])
-		//s.Exitf("XXX")
+
 	}
 
 	// Prepare to encode transaction output.
-	txs := make(chan (data.Transaction))
+	unsignedOut := make(chan (data.Transaction))
 	g.Go(func() error {
-		return marshal.EncodeTransactions(os.Stdout, txs)
+		return pipeline.EncodeOutput(os.Stdout, unsignedOut)
 	})
 
 	// Prepare transaction.
@@ -191,17 +195,15 @@ func (s *State) sellCommand(fs *flag.FlagSet) {
 	log.Printf("Unsigned:\n%s\n", string(j))
 
 	// Pass unsigned transaction to encoder
-	txs <- offer
-	close(txs)
+	unsignedOut <- offer
+	close(unsignedOut)
 
 	err = g.Wait()
-	if err != nil {
-		s.Exit(err)
-	}
-	//time.Sleep(10 * time.Second) // test
-	//log.Println("exiting.")
+	command.Check(err)
 
 	// In case user in on a terminal, nice to have a clean line.
 	fmt.Fprintf(os.Stderr, "\n")
-	log.Printf("Unsigned %s by %s prepared.\n", offer.GetType(), offer.GetBase().Account)
+	command.Infof("unsigned %s by %s prepared", offer.GetType(), offer.GetBase().Account)
+
+	return nil
 }

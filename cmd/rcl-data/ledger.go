@@ -1,4 +1,4 @@
-// Copyright (C) 2019  David N. Cohen
+// Copyright (C) 2019-2020  David N. Cohen
 // This file is part of github.com/dncohen/rcl
 //
 // This program is free software: you can redistribute it and/or modify
@@ -26,15 +26,17 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/dncohen/rcl/internal/cmd"
 	"github.com/dncohen/rcl/rippledata"
 	"github.com/dncohen/rcl/rippledata/history"
 	"github.com/rubblelabs/ripple/data"
 	"src.d10.dev/command"
+	"src.d10.dev/command/config"
 )
 
 func init() {
 	command.RegisterOperation(command.Operation{
-		Handler:     ledgerMain,
+		Handler:     opLedger,
 		Name:        "ledger",
 		Syntax:      "ledger [-fee=false] <account> [...]",
 		Description: `Operation "ledger" writes historical activity in ledger-cli format.`,
@@ -134,7 +136,7 @@ func (this *LedgerSplit) GetInvertedChangeType() string {
 }
 
 type LedgerTransaction struct {
-	Comment string
+	Comment []string
 	Date    string
 	Payee   string
 	Split   []*LedgerSplit // ledger-cli "split"
@@ -162,6 +164,11 @@ func NewLedgerTransaction(event []*history.AccountTx) *LedgerTransaction {
 		byType: make(map[string][]int),
 		offset: make(map[int]int),
 	}
+
+	this.Comment = append(this.Comment,
+		fmt.Sprintf("ledger #%d | tx #%d | %s", event[0].GetLedgerIndex(), event[0].GetTransactionIndex(), event[0].GetExecutedTime()),
+	)
+
 	var offset *LedgerSplit
 	for i, e := range event {
 		this.Split[i] = NewLedgerSplit(e)
@@ -204,10 +211,10 @@ func (this *LedgerTransaction) SetTransaction(tx *rippledata.GetTransactionRespo
 	switch t := tx.Transaction.Tx.Transaction.(type) { // naming is hard
 
 	case *data.OfferCreate:
-		this.Comment = fmt.Sprintf("Offer created by %s; taker gets %s; taker pays %s", formatAccount(t.Account, t.SourceTag), t.TakerGets, t.TakerPays)
+		this.Comment = append(this.Comment, fmt.Sprintf("Offer created by %s; taker gets %s; taker pays %s", formatAccount(t.Account, t.SourceTag), t.TakerGets, t.TakerPays))
 
 	case *data.Payment:
-		this.Comment = fmt.Sprintf("Payment %s -> %s (%s, delivered %s)", formatAccount(t.Account, t.SourceTag), formatAccount(t.Destination, t.DestinationTag), this.meta.TransactionResult, this.meta.DeliveredAmount)
+		this.Comment = append(this.Comment, fmt.Sprintf("Payment %s -> %s (%s, delivered %s)", formatAccount(t.Account, t.SourceTag), formatAccount(t.Destination, t.DestinationTag), this.meta.TransactionResult, this.meta.DeliveredAmount))
 
 		// if events are only "exchange", we don't need to add splits for source or destination
 
@@ -234,7 +241,7 @@ func (this *LedgerTransaction) SetTransaction(tx *rippledata.GetTransactionRespo
 		}
 
 	default:
-		this.Comment = fmt.Sprintf("%T %s (%s)", t, formatAccount(t.GetBase().Account, nil), this.meta.TransactionResult)
+		this.Comment = append(this.Comment, fmt.Sprintf("%T %s (%s)", t, formatAccount(t.GetBase().Account, nil), this.meta.TransactionResult))
 	}
 }
 
@@ -347,7 +354,11 @@ func (this *LedgerTransaction) String() string {
 
 // Formats transaction header to stdout and splits to table writer.
 func (this *LedgerTransaction) RenderHead(w io.Writer) {
-	fmt.Fprintf(w, "\n; %s\n", this.Comment)
+
+	fmt.Fprintln(w, "") // blank line
+	for _, c := range this.Comment {
+		fmt.Fprintf(w, "; %s\n", c)
+	}
 
 	// ledger-cli transaction have a date only, no time of day; we
 	// include time here so that "--sort='date,payee'" can be used to
@@ -471,9 +482,18 @@ func (this *LedgerTransaction) NormalizePrice(dataClient rippledata.Client, base
 	return newData
 }
 
-func ledgerMain() error {
-	cfg, _ := command.Config()
-	defaultAsset := cfg.Section("").Key("base").MustString("USD/rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B") // rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B is bitstamp
+func opLedger() error {
+	var defaultAsset string
+	cfg, err := command.Config()
+	if err != nil {
+		if errors.Is(err, config.ConfigNotFound) {
+			defaultAsset = "USD/rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B" // default bitstamp
+			err = nil                                              // not found is not fatal error
+		}
+		command.Check(err)
+	} else {
+		defaultAsset = cfg.Section("").Key("base").MustString("USD/rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B") // rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B is bitstamp
+	}
 
 	// define flags
 	baseFlag := command.OperationFlagSet.String("base", defaultAsset, "query for price relative to base")
@@ -482,8 +502,10 @@ func ledgerMain() error {
 	nFlag := command.OperationFlagSet.Int("n", 0, "how many transactions to inspect (for debugging); use 0 for all")
 	localFlag := command.OperationFlagSet.String("local", time.Local.String(), "show times local to this timezone")
 
+	allFlag := command.OperationFlagSet.Bool("all", false, "query status of transaction, even if balance unaffected")
+
 	// parse flags
-	err := command.OperationFlagSet.Parse(command.Args()[1:])
+	err = command.ParseOperationFlagSet()
 	if err != nil {
 		return err
 	}
@@ -521,8 +543,8 @@ func ledgerMain() error {
 		log.Println("endDate:", endDate)
 	}
 
-	// TODO(dnc): make data API url configurable
-	dataAPI := "https://data.ripple.com/v2/" // trailing slash needed.
+	dataAPI, err := cmd.DataAPI()
+	command.Check(err)
 	dataClient, err := rippledata.NewClient(dataAPI)
 	command.Check(err)
 
@@ -569,7 +591,7 @@ func ledgerMain() error {
 			ledgerTx.Suppress("transaction_cost")
 		}
 
-		if !ledgerTx.IsSuppressed() {
+		if !ledgerTx.IsSuppressed() || *allFlag {
 
 			// Query data api for the transaction responsible for balance
 			// changes.  This allows us to learn additional details not

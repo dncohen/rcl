@@ -1,4 +1,4 @@
-// Copyright (C) 2019  David N. Cohen
+// Copyright (C) 2019-2020  David N. Cohen
 // This file is part of github.com/dncohen/rcl
 //
 // This program is free software: you can redistribute it and/or modify
@@ -14,76 +14,18 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// Command RCL-data
-//
-// The rcl-data command retrieves historical data from
-// data.ripple.com/v2/... and displays information about accounts on
-// the Ripple Consensus Ledger.
-//
-// Each subcommand has a -help flag that explains it in more detail.  For instance
-//
-//   rcl-data show -help
-//
-// explains the purpose and usage of the show subcommand.
-//
-// There is a set of global flags such as -config to specify the
-// configuration directory, where rcl-data expects to find one or more
-// *.cfg files.  These global flags apply to all subcommands.
-//
-// Each subcommand has its own set of flags, which if used must appear
-// after the subcommand name.
-//
-// For a list of available subcommands and global flags, run
-//
-//   rcl-data -help
-//
-package main
+package cmd
 
 import (
-	"flag"
+	"errors"
 	"fmt"
 	"log"
-	"strings"
 
 	"github.com/go-ini/ini"
-	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
 	"src.d10.dev/command"
 	"src.d10.dev/command/config"
 )
-
-// Use `go get src.d10.dev/dumbdown` to fetch dumbdown tool.
-//go:generate sh -c "go doc | dumbdown > README.md"
-
-func main() {
-	command.RegisterCommand(command.Command{
-		Application: "rcl",
-		Description: "Inspect historical Ripple Consensus Ledger activity.",
-	})
-
-	_, err := command.Config()
-	if errors.Cause(err) == config.ConfigNotFound {
-		// not a problem, we'll use defaults
-		// TODO(dnc): if -config specified explicitly on command line, make this a fatal error
-		command.Info(err)
-		err = nil
-	}
-	command.CheckUsage(err)
-
-	// this command requires an operation
-	if len(flag.CommandLine.Args()) < 1 {
-		command.CheckUsage(errors.New("command requires an operation"))
-	}
-
-	// default prefix for subcommand
-	log.SetPrefix(fmt.Sprintf("rcl-data %s: ", flag.CommandLine.Args()[0]))
-
-	err = command.CurrentOperation().Operate()
-	command.CheckUsage(err)
-
-	command.Exit()
-
-}
 
 // AccountTag is a "fully qualified" account identifier, meaning an
 // address and destination (or source) tag.
@@ -125,6 +67,10 @@ func initializeNicknames() error {
 
 	cfg, err := command.Config()
 	if err != nil {
+		if errors.Is(err, config.ConfigNotFound) {
+			// no config, no nicknames
+			return nil
+		}
 		return err
 	}
 
@@ -166,28 +112,13 @@ func initializeNicknames() error {
 	return nil
 }
 
-// avoid scientific notation, not understood by ledger-cli
-func formatValue(v data.Value) string {
-	// unfortunately rubblelabs does not export data.Value:isScientific,
-	// so we must manipulate strings
-	str := v.String()
-	if strings.Index(str, "e") != -1 {
-		// simply using fmt.Sprintf("%f", v.Float()) produces, for example "0.000000"
-
-		rat := v.Rat()
-		// debug
-		command.V(1).Infof("formatValue: converting scientific notation from %q to %q", v.String(), rat.FloatString(16))
-		str = fmt.Sprintf("%s", rat.FloatString(16)) // TODO(dnc): proper decimal precision?
-	}
-	return str
-}
-
 // returns account nickname if known; otherwise, address string
-func formatAccount(account data.Account, tag *uint32) string {
+func FormatAccount(account data.Account, tag *uint32) string {
 	nick, _ := accountDetail(account, tag)
 	return nick
 }
 
+// deprecated, see AccountConfig
 func accountDetail(account data.Account, tag *uint32) (nick, ledger string) {
 	at := NewAccountTag(account, tag)
 	cfg, ok := accountConfig[at]
@@ -202,16 +133,26 @@ func accountDetail(account data.Account, tag *uint32) (nick, ledger string) {
 		return account.String(), ""
 	}
 	nick = cfg.Name()
-	if cfg.HasKey("ledger") {
+	if cfg.HasKey("ledger") { // TODO(dnc): remind myself what this is about?
 		ledger = cfg.Key("ledger").Value()
 	}
 	return
 }
 
+func AccountConfig(acct data.Account, tag *uint32) (*ini.Section, bool) {
+	t := uint32(0)
+	if tag != nil {
+		t = *tag
+	}
+
+	cfg, ok := accountConfig[AccountTag{acct, t}]
+	return cfg, ok
+}
+
 // Helper for operations that expect a list of accounts.  We want to
 // accept (and display) accounts by local nickname, as well as normal
 // ripple address.
-func parseAccountArg(arg []string) ([]AccountTag, error) {
+func ParseAccountArg(arg []string) ([]AccountTag, error) {
 	err := initializeNicknames()
 	if err != nil {
 		return nil, err

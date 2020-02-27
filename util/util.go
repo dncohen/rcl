@@ -10,6 +10,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/crypto"
 	"github.com/rubblelabs/ripple/data"
+	"src.d10.dev/command"
 )
 
 const (
@@ -155,4 +156,20 @@ func ParseCompleteLedgers(v string) (uint32, uint32, error) {
 
 	return 0, 0, errors.Wrapf(err, "Failed to parse ledger history: %s", v)
 
+}
+
+// Print a numeric value, avoiding scientific notation.
+func FormatValue(v data.Value) string {
+	// unfortunately rubblelabs does not export data.Value:isScientific,
+	// so we must manipulate strings
+	str := v.String()
+	if strings.Index(str, "e") != -1 {
+		// simply using fmt.Sprintf("%f", v.Float()) produces, for example "0.000000"
+
+		rat := v.Rat()
+		// debug
+		command.V(1).Infof("formatValue: converting scientific notation from %q to %q", v.String(), rat.FloatString(16))
+		str = fmt.Sprintf("%s", rat.FloatString(16)) // TODO(dnc): proper decimal precision?
+	}
+	return str
 }

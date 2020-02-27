@@ -1,7 +1,27 @@
+// Copyright (C) 2018-2020  David N. Cohen
+// This file is part of github.com/dncohen/rcl
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+// Command RCL-account - Operation Monitor
+//
+//     rcl-account monitor <address>
+//
+// Shows account activity as soon as it is detected.
 package main
 
 import (
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -9,101 +29,69 @@ import (
 	"text/tabwriter"
 
 	"golang.org/x/sync/errgroup"
+	"src.d10.dev/command"
 
+	"github.com/dncohen/rcl/internal/cmd"
 	"github.com/dncohen/rcl/util"
 	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
 )
 
-func (s *State) monitor(args ...string) {
-	const help = `
+func init() {
+	command.RegisterOperation(command.Operation{
+		Handler:     opMonitor,
+		Name:        "monitor",
+		Syntax:      "monitor [-since=<int>] <account> [...]",
+		Description: `Monitor RCL for activity related to an account.`,
+	})
+}
 
-Monitor RCL for transaction activity related to an account.
-
-`
+func opMonitor() error {
 
 	// subcommand-specific flags
-	fs := flag.NewFlagSet("monitor", flag.ExitOnError)
-	fs.Int("since", 0, "Ledger sequence number where monitoring will start. Defaults to most recent.")
+	sinceFlag := command.OperationFlagSet.Int("since", -1, "show activity following a specific ledger; use -1 for most recent")
 
-	s.ParseFlags(fs, args, help, "monitor [-since=<int>]")
+	err := command.ParseOperationFlagSet()
+	command.CheckUsage(err)
 
-	s.monitorCommand(fs)
-}
+	rippled, err := cmd.Rippled()
+	command.Check(err)
 
-var (
-	// Which accounts to monitor?
-	accounts map[string]*data.Account
-)
+	account, err := cmd.ParseAccountArg(command.OperationFlagSet.Args())
+	command.Check(err)
 
-func accountsToMonitorXXX(args []string) (map[string]*data.Account, error) {
-	if len(args) > 0 {
-		accounts = make(map[string]*data.Account)
-
-		// Each arg could be either address or nickname
-		for _, arg := range args {
-			account, _, ok := config.GetAccountByNickname(arg)
-			if !ok {
-				var err error
-				account, err = data.NewAccountFromAddress(arg)
-				if err != nil {
-					return accounts, errors.Wrapf(err, "Bad account address: %s", arg)
-				}
-			}
-			accounts[arg] = account
-		}
-		return accounts, nil
-	} else {
-		// TODO get all accounts from config
-		return nil, fmt.Errorf("no account specified")
-		//return config.GetAccountsByNickname(), nil
+	if len(account) == 0 {
+		command.CheckUsage(errors.New("expected one or more addresses"))
 	}
-}
-
-func (s *State) monitorCommand(fs *flag.FlagSet) {
-	log.SetPrefix(programName + " monitor: ")
-
-	rippled := config.Section("").Key("rippled").String()
-	if rippled == "" {
-		s.Exitf("rippled websocket address not found in configuration file. Exiting.")
-	}
-
-	accounts, err := accountsFromArgs(fs.Args())
-	if err != nil {
-		s.Exit(err)
-	}
-	if len(accounts) == 0 {
-		log.Println("No accounts specified")
-		s.ExitNow()
-	}
-	log.Printf("Monitoring %d accounts", len(accounts))
+	command.Infof("Monitoring %d accounts", len(account))
 
 	// A subscription lets us know when new ledgers are validated.
 	subscription, err := util.NewSubscription(rippled)
 	if err != nil {
-		s.Exit(errors.Wrapf(err, "Failed to connect to %s", rippled))
+		command.Check(fmt.Errorf("Failed to connect to %q: %w", rippled, err))
 	}
+
 	go subscription.Loop()
-	log.Printf("Connected to %s\n", rippled) // debug
+	command.V(1).Infof("connected to %q", rippled)
 
 	min, max, err := subscription.Ledgers()
 	if err != nil {
-		s.Exit(errors.Wrapf(err, "Failed to get available ledgers from %s", rippled))
+		command.Check(fmt.Errorf("failed to get available ledgers from %q: %w", rippled, err))
 	}
-	log.Printf("%s ledger history %d - %d\n", rippled, min, max)
+	command.V(1).Infof("%s ledger history %d - %d\n", rippled, min, max)
 
 	var since uint32
-	switch i := intFlag(fs, "since"); i {
+	switch *sinceFlag {
 	case -1:
 		since = min
 	case 0:
 		since = max
 	default:
-		since = uint32(i)
+		since = uint32(*sinceFlag)
 	}
 
 	if since < min || since > max {
-		s.Exitf("Cannot start with ledger %d.  History available on %s is %d-%d.\n", since, rippled, min, max)
+		command.Check(fmt.Errorf("Cannot start with ledger %d.  History available on %s is %d-%d.\n", since, rippled, min, max))
 	}
 
 	// Scan ledger indexes one by one, so as never to miss data.  We
@@ -124,7 +112,7 @@ func (s *State) monitorCommand(fs *flag.FlagSet) {
 			// Wait for the ledger sequence, if necessary.
 			min, max, err := subscription.Ledgers()
 			if err != nil {
-				log.Printf("Failed query ledger history: %s\n", err)
+				command.Infof("Failed query ledger history: %s\n", err)
 				// try again.  TODO sleep first?
 				go func(idx uint32) {
 					ledgerIndexes <- idx
@@ -133,7 +121,7 @@ func (s *State) monitorCommand(fs *flag.FlagSet) {
 			}
 
 			if min > idx {
-				log.Panicf("Failed to get ledger %d, available history is %d-%d.", idx, min, max)
+				command.Check(fmt.Errorf("Failed to get ledger %d, available history is %d-%d.", idx, min, max))
 			}
 			if max < idx {
 				//log.Printf("Waiting for ledger %d...\n", idx)
@@ -141,7 +129,7 @@ func (s *State) monitorCommand(fs *flag.FlagSet) {
 				// log.Printf("...ledger %d now available.\n", seq)
 				// Sanity check
 				if seq != idx {
-					log.Panicf("Unexpected %d returned from subscription.AfterSequence(%d).", seq, idx)
+					command.Check(fmt.Errorf("Unexpected %d returned from subscription.AfterSequence(%d).", seq, idx))
 				}
 			}
 
@@ -151,10 +139,10 @@ func (s *State) monitorCommand(fs *flag.FlagSet) {
 			txs := make(map[uint32]*data.TransactionWithMetaData)
 			_ = txs
 			g := new(errgroup.Group)
-			for _, acct := range accounts {
+			for _, acct := range account {
 				g.Go(func() error {
 					//log.Printf("requesting %d", idx) // debug
-					txChan := subscription.Remote.AccountTx(*acct, 10, int64(idx), int64(idx))
+					txChan := subscription.Remote.AccountTx(acct.Account, 10, int64(idx), int64(idx))
 					for tx := range txChan {
 						// transactions will be shown in order they are applied to ledger.
 						txs[tx.MetaData.TransactionIndex] = tx

@@ -1,120 +1,113 @@
+// Copyright (C) 2018-2020  David N. Cohen
+// This file is part of github.com/dncohen/rcl
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+// Operation send
+//
+// Send XRP or issuance.
+//
 package main
 
 import (
-	"encoding/hex"
-	"encoding/json"
-	"flag"
-	"log"
+	"fmt"
 	"os"
 
 	"golang.org/x/sync/errgroup"
+	"src.d10.dev/command"
 
+	"github.com/dncohen/rcl/internal/cmd"
+	"github.com/dncohen/rcl/internal/pipeline"
 	"github.com/dncohen/rcl/tx"
-	"github.com/dncohen/rcl/util/marshal"
-	"github.com/golang/glog"
 	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
 	"github.com/rubblelabs/ripple/websockets"
 )
 
 var (
-	zeroAccount data.Account
+	zeroAccount data.Account // TODO(dnc): move to internal utils
 )
 
-// send is a simple payment where the source and destination currency are the same.
-
-func (s *State) send(args ...string) {
-	const help = `
-
-Send XRP or issuance.  This is a simple payment, meaning the source and destination currency is the same.
-`
-
-	fs := flag.NewFlagSet("send", flag.ExitOnError)
-	fs.String("sendmax", "", "Specify SendMax, allows cross-currency payment")
-
-	// Memo fields allowed on any transaction. So this logic should be
-	// moved to main.go or somewhere else common to each rcl-tx
-	// subcommand.  Also TODO, support multiple memos per transaction.
-	fs.String("memo", "", "A memo string, to be hex encoded and written to ledger with the transaction.")
-	fs.String("memohex", "", "A memo string, already hex encoded, to be written to ledger with the transaction.")
-
-	s.ParseFlags(fs, args, help, "send <beneficiary> <amount>")
-	s.sendCommand(fs)
+func init() {
+	command.RegisterOperation(command.Operation{
+		Handler:     opSend,
+		Name:        "send",
+		Syntax:      "send  <beneficiary> <amount>",
+		Description: `Send an RCL asset or issuance from one account to another.`,
+	})
 }
 
-func (s *State) sendCommand(fs *flag.FlagSet) {
-	log.SetPrefix(programName + " send: ")
+func opSend() error {
+
+	sendmaxFlag := command.OperationFlagSet.String("sendmax", "", "Specify SendMax, allows cross-currency payment")
+
+	command.CheckUsage(command.ParseOperationFlagSet())
 
 	fail := false
+
 	// command line args
 	var sendMax *data.Amount
-	sendmax := stringFlag(fs, "sendmax")
-	if sendmax != "" {
+
+	if *sendmaxFlag != "" {
 		var err error
-		sendMax, err = data.NewAmount(sendmax)
+		sendMax, err = data.NewAmount(*sendmaxFlag)
 		if err != nil {
-			s.Exit(errors.Wrapf(err, "Bad sendmax %s", sendmax))
+			command.Check(fmt.Errorf("bad sendmax (%q): %w", *sendmaxFlag, err))
 		}
 	}
 
-	memoFlag := stringFlag(fs, "memo")
-	var memo *string
-	if memoFlag != "" {
-		memo = &memoFlag
+	argument := command.OperationFlagSet.Args()
+	if len(argument) != 2 {
+		command.CheckUsage(errors.New("operation requires <destination> and <amount> arguments"))
 	}
 
-	memohexFlag := stringFlag(fs, "memohex")
-	memohexBytes := []byte(memohexFlag)
-	var memohex []byte
-	if memohexFlag != "" {
-		memohex = make([]byte, hex.DecodedLen(len(memohexBytes)))
-		_, err := hex.Decode(memohex, memohexBytes)
-		if err != nil {
-			log.Printf("Failed to decode hex memo (\"%s\")\n", memohexFlag)
-			fail = true
-		}
-	}
-
-	args := fs.Args()
-	if len(args) != 2 {
-		usageAndExit(fs)
-	}
-
-	arg := 0
-	var tag *uint32
-	beneficiary, tag, err := config.AccountFromArg(args[arg])
+	beneficiaryArg, err := cmd.ParseAccountArg(argument[0:1])
 	if err != nil {
-		log.Printf("Expected beneficiary address, got \"%s\" (%s)\n", args[arg], err)
+		command.Errorf("bad beneficiary address (%q): %s", argument[0], err)
 		fail = true
 	}
-	arg++
-	amount, err := config.AmountFromArg(args[arg])
+	beneficiary := beneficiaryArg[0].Account
+	beneficiaryTag := &beneficiaryArg[0].Tag
+	if *beneficiaryTag == 0 {
+		beneficiaryTag = nil
+	}
+
+	amount, err := cmd.AmountFromArg(argument[1])
 	if err != nil {
-		log.Printf("Expected amount, got \"%s\" (%s)\n", args[arg], err)
+		command.Errorf("bad amount (%q): %s", argument[1], err)
 		fail = true
 	}
 
-	rippled := config.GetRippled()
-	if rippled == "" {
-		log.Println("No rippled URL found in rcl.cfg.")
+	rippled, err := cmd.Rippled()
+	if err != nil {
+		command.Errorf(err.Error())
 		fail = true
 	}
 
 	// -as <account> is parsed in main.go
 	if asAccount == nil {
-		log.Println("Sell subcommand requires as account specified in configuration file or use `-as <account>` flag.")
+		command.Errorf("operation requires -as <account> flag")
 		fail = true
 	}
 
 	if fail {
-		s.ExitNow()
+		command.Exit()
 	}
 
 	// Connect, to learn LastLedgerSequence and account sequence.
 	remote, err := websockets.NewRemote(rippled)
-	if err != nil {
-		s.Exit(errors.Wrapf(err, "Failed to connect to %s", rippled))
-	}
+	command.Check(err)
 
 	// TODO Want to close, but leads to "use of closed network connection" error.
 	//defer remote.Close()
@@ -126,20 +119,17 @@ func (s *State) sendCommand(fs *flag.FlagSet) {
 		var err error
 		accountInfo, err = remote.AccountInfo(*asAccount)
 		if err != nil {
-			log.Printf("Failed to get account_info %s: %s", asAccount, err)
-			return err
+			return fmt.Errorf("failed to get account_info (%s): %w", asAccount, err)
 		}
 		return nil
 	})
 	err = g.Wait()
-	if err != nil {
-		s.Exit(err)
-	}
+	command.Check(err)
 
 	// Ensure no ambiguity in amounts or issuers.
 	if !amount.IsNative() && amount.Issuer == zeroAccount {
-		glog.V(1).Infof("using %s as %s issuer", beneficiary, amount.Currency)
-		amount.Issuer = *beneficiary
+		command.V(1).Infof("using %s as %s issuer", beneficiary, amount.Currency)
+		amount.Issuer = beneficiary
 	}
 	if sendMax == nil && !amount.IsNative() { // No sendmax on XRP payments
 		sendMax = amount
@@ -153,40 +143,35 @@ func (s *State) sendCommand(fs *flag.FlagSet) {
 		tx.SetSourceTag(asTag),
 		tx.SetSequence(*accountInfo.AccountData.Sequence),
 		tx.SetLastLedgerSequence(accountInfo.LedgerSequence+LedgerSequenceInterval),
-		tx.SetFee(12),    // TODO
-		tx.AddMemo(memo), // TODO support multiple memo fields
+		tx.SetFee(12), // TODO
+
+		tx.AddMemo(memoFlag), // TODO support multiple memo fields
 		tx.AddMemo(memohex),
 
 		// Simple payment, source and destination currency the same.
 		tx.SetAmount(amount),
 		tx.SetSendMax(sendMax),
 
-		tx.SetDestination(*beneficiary),
-		tx.SetDestinationTag(tag),
+		tx.SetDestination(beneficiary),
+		tx.SetDestinationTag(beneficiaryTag),
 
 		tx.SetCanonicalSig(true),
 	)
 
-	if glog.V(1) {
-		// Show in json format (debug)
-		j, _ := json.MarshalIndent(tx, "", "\t")
-		glog.Infof("Unsigned:\n%s\n", string(j))
-	}
-
 	// Prepare to encode transaction output.
-	txs := make(chan (data.Transaction))
+	unsignedOut := make(chan (data.Transaction))
 	g.Go(func() error {
-		return marshal.EncodeTransactions(os.Stdout, txs)
+		return pipeline.EncodeOutput(os.Stdout, unsignedOut)
 	})
 
 	// Pass unsigned transaction to encoder
-	txs <- tx
-	close(txs)
+	unsignedOut <- tx
+	close(unsignedOut)
 
 	err = g.Wait()
-	if err != nil {
-		s.Exit(err)
-	}
+	command.Check(err)
 
-	glog.V(2).Infof("Prepared unsigned %s from %s to %s.\n", tx.GetType(), tx.Account, tx.Destination)
+	command.V(1).Infof("Prepared unsigned %s from %s to %s.\n", tx.GetType(), tx.Account, tx.Destination)
+
+	return nil
 }
