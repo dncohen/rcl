@@ -54,15 +54,20 @@ type LedgerSplit struct {
 
 func NewLedgerSplit(event *history.AccountTx) *LedgerSplit {
 	this := &LedgerSplit{
-		Name:   fmt.Sprintf("Assets:Crypto:RCL:%s", formatAccount(*event.Account, nil)),
-		Amount: event.Transaction.(rippledata.BalanceChangeDescriptor).GetChangeAmount(),
-		event:  event,
+		Name:  fmt.Sprintf("Assets:Crypto:RCL:%s", formatAccount(*event.Account, nil)),
+		event: event,
 	}
 	switch t := this.event.Transaction.(type) {
 	case rippledata.BalanceChangeDescriptor:
-		this.Comment = t.ChangeType
+		this.Comment = fmt.Sprintf(":%s:", t.ChangeType) // ledger-cli tags in :colons:
+		this.Amount = t.GetChangeAmount()
+		if this.Amount.IsZero() {
+			// there are transactions where data api returns balance change of "0"
+			// these may cause problems for ledger-cli, so comment them out
+			this.suppress = true
+		}
 	default:
-		this.Comment = fmt.Sprintf("FIXME unexpected event type (%T)", t)
+		this.Comment = fmt.Sprintf(":FIXME: unexpected event type (%T)", t)
 	}
 	return this
 }
