@@ -184,7 +184,7 @@ func NewLedgerTransaction(event []*history.AccountTx) *LedgerTransaction {
 		this.offset[feeIndex] = len(this.Split) - 1
 	}
 
-	this.Date = this.GetExecutedTime().Format("2006-01-02")
+	this.Date = this.GetExecutedTime().Format("2006/01/02") // ledger-cli 'print' command uses slashes
 	this.Payee = this.GetHash().String()
 	command.V(2).Infof("transaction (%q) on %s has %d events", this.Payee, this.Date, len(event))
 
@@ -202,6 +202,10 @@ func (this *LedgerTransaction) SetTransaction(tx *rippledata.GetTransactionRespo
 
 	// type-specific comment preceeding transaction
 	switch t := tx.Transaction.Tx.Transaction.(type) { // naming is hard
+
+	case *data.OfferCreate:
+		this.Comment = fmt.Sprintf("Offer created by %s; taker gets %s; taker pays %s", formatAccount(t.Account, t.SourceTag), t.TakerGets, t.TakerPays)
+
 	case *data.Payment:
 		this.Comment = fmt.Sprintf("Payment %s -> %s (%s, delivered %s)", formatAccount(t.Account, t.SourceTag), formatAccount(t.Destination, t.DestinationTag), this.meta.TransactionResult, this.meta.DeliveredAmount)
 
@@ -217,7 +221,6 @@ func (this *LedgerTransaction) SetTransaction(tx *rippledata.GetTransactionRespo
 				this.offset[i[0]] = len(this.Split) - 1
 			}
 		}
-		this.sanity()
 
 		i, ok = this.byType["payment debit"]
 		if ok {
@@ -229,7 +232,6 @@ func (this *LedgerTransaction) SetTransaction(tx *rippledata.GetTransactionRespo
 				}
 			}
 		}
-		this.sanity()
 
 	default:
 		this.Comment = fmt.Sprintf("%T %s (%s)", t, formatAccount(t.GetBase().Account, nil), this.meta.TransactionResult)
@@ -346,7 +348,11 @@ func (this *LedgerTransaction) String() string {
 // Formats transaction header to stdout and splits to table writer.
 func (this *LedgerTransaction) RenderHead(w io.Writer) {
 	fmt.Fprintf(w, "\n; %s\n", this.Comment)
-	fmt.Fprintf(w, "%s %s\n", this.Date, this.Payee) // payee
+
+	// ledger-cli transaction have a date only, no time of day; we
+	// include time here so that "--sort='date,payee'" can be used to
+	// sort transaction by time.
+	fmt.Fprintf(w, "%s %s %s\n", this.Date, this.GetExecutedTime().Format("15:04:05"), this.Payee) // payee
 }
 
 func (this *LedgerTransaction) RenderSplit(w io.Writer) {
@@ -474,6 +480,7 @@ func ledgerMain() error {
 	feeFlag := command.OperationFlagSet.Bool("fee", false, "include transaction fees")
 	endFlag := command.OperationFlagSet.String("end", "", "last date to include")
 	nFlag := command.OperationFlagSet.Int("n", 0, "how many transactions to inspect (for debugging); use 0 for all")
+	localFlag := command.OperationFlagSet.String("local", time.Local.String(), "show times local to this timezone")
 
 	// parse flags
 	err := command.OperationFlagSet.Parse(command.Args()[1:])
@@ -499,9 +506,15 @@ func ledgerMain() error {
 		command.Check(err)
 	}
 
+	if *localFlag != "" && *localFlag != time.Local.String() {
+		tmp, err := time.LoadLocation(*localFlag)
+		command.Check(err)
+		time.Local = tmp
+	}
+
 	var endDate time.Time
 	if *endFlag != "" {
-		endDate, err = time.Parse("2006-01-02", *endFlag)
+		endDate, err = time.Parse("2006/01/02", *endFlag)
 		command.Check(err)
 		// To round to the last midnight in the local timezone, create a new Date.
 		endDate = time.Date(endDate.Year(), endDate.Month(), endDate.Day(), 0, 0, 0, 0, time.Local)
