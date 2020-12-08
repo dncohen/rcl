@@ -93,7 +93,7 @@ func opTrust() error {
 
 	// Learn the needed detail of the account setting the line.
 	remote, err := websockets.NewRemote(rippled)
-	command.Check(fmt.Errorf("failed to connect to %q: %w", rippled, remote))
+	command.Check(fmt.Errorf("failed to connect to %q: %w", rippled, err))
 	defer remote.Close()
 
 	command.Infof("connected to %q", rippled) // verbose
