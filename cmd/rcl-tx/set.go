@@ -21,6 +21,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strings"
@@ -52,7 +53,7 @@ func init() {
 func opSet() error {
 
 	domainFlag := command.OperationFlagSet.String("domain", unchanged, "The domain that owns this account, in lower case.")
-
+	messagekeyhexFlag := command.OperationFlagSet.String("messagekeyhex", unchanged, "Hexidecimal encoded public key for sending encrypted messages to this account.")
 	command.CheckUsage(command.ParseOperationFlagSet())
 
 	if *asFlag == "" {
@@ -63,6 +64,16 @@ func opSet() error {
 		domainLower := strings.ToLower(*domainFlag)
 		if *domainFlag != domainLower {
 			command.Check(fmt.Errorf("spell domain (%q) in lower-case, i.e. %q", *domainFlag, domainLower))
+		}
+	}
+
+	// TODO(dnc): is there any way to unset a messagekey after it has been set?
+	var messageKey []byte
+	if *messagekeyhexFlag != unchanged {
+		messageKey = make([]byte, hex.DecodedLen(len([]byte(*messagekeyhexFlag))))
+		_, err := hex.Decode(messageKey, []byte(*messagekeyhexFlag))
+		if err != nil {
+			command.Check(fmt.Errorf("bad messagekeyhex (%q): %w", *messagekeyhexFlag, err))
 		}
 	}
 
@@ -112,6 +123,7 @@ func opSet() error {
 		tx.AddMemo(memoFlag), // TODO support multiple memo fields
 		tx.AddMemo(memohex),
 		tx.SetDomain(domainFlag),
+		tx.SetMessageKey(messageKey),
 		tx.SetCanonicalSig(true),
 	)
 

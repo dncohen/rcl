@@ -39,3 +39,50 @@ func SetDomain(domain *string) func(data.Transaction) error {
 		return nil
 	}
 }
+
+// SetMessageKey populates the MessageKey field of an AccountSet transaction.
+//
+// See https://xrpl.org/accountset.html
+//
+func SetMessageKey(messageKey interface{}) func(data.Transaction) error {
+	return func(tx data.Transaction) error {
+		t, ok := tx.(*data.AccountSet)
+		if !ok {
+			return errors.Errorf("Expected AccountSet transaction, got %s", tx.GetBase().TransactionType)
+		}
+
+		if messageKey == nil {
+			// No change to domain.  Note that "" is used to unset the message key.
+			return nil
+		}
+
+		var val data.VariableLength
+
+		switch in := messageKey.(type) {
+		// Note only the []byte path here is known to work.  MessageKey is
+		// documented as a string, but transaction will fail to validate
+		// unless it is set just right.  And how to do that is not made clear.
+
+		case []byte:
+			// this code path has worked
+			if in == nil {
+				return nil
+			}
+			val = in
+
+		case *string:
+			if in == nil {
+				return nil
+			}
+			val = []byte(*in)
+
+		case string:
+			val = []byte(in)
+
+		}
+
+		t.MessageKey = &val
+
+		return nil
+	}
+}

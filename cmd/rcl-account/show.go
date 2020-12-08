@@ -149,13 +149,14 @@ func opShow() error {
 		account := accountResult.AccountData.Account
 
 		table := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.Debug)
-		fmt.Fprintln(table, "Account\t XRP\t Sequence\t Owner Count\t Ledger Index\t")
-		fmt.Fprintf(table, "%s\t %s\t %d\t %d\t %d\t\n",
+		fmt.Fprintln(table, "Account\t XRP\t Sequence\t Owner Count\t Ledger Index\t Message Key\t")
+		fmt.Fprintf(table, "%s\t %s\t %d\t %d\t %d\t %s\t\n",
 			cmd.FormatAccount(*account, nil),
 			accountResult.AccountData.Balance,
 			*accountResult.AccountData.Sequence,
 			*accountResult.AccountData.OwnerCount,
 			accountResult.LedgerSequence,
+			accountResult.AccountData.MessageKey,
 		)
 		table.Flush()
 		fmt.Println("") // blank line
