@@ -65,16 +65,17 @@
 // meet the reserve requirement.
 //
 // Before we use our wallets, its a good practice to make a paper
-// backup of the secret keys.  While not strictly speaking a
-// requirement when using the testnet, RCL tools expects this will all
-// keys.  So let's go through the motions.
+// backup of the secret keys. RCL tools provides a `backup` operation
+// to support this. This step is required, even for testnet keys,
+// because the `backup` operation writes the public address to a
+// config file needed later.
 //
 //    rcl-key backup *.rcl-key
 //
 // The `rcl-key backup` operation walks you through the secrets,
-// giving you a chance to copy each one to paper.  Don't bother for
-// test accounts, just press [return] a few times and you'll see how
-// `rcl-key backup` works.
+// giving you a chance to copy each one to paper. (For test accounts,
+// you can skip writing the down the secret; just press [return] a few
+// times.)
 //
 // As you make a paper backup of each key, the tool writes a
 // configuration file with the address, but not the secret, of each
@@ -113,7 +114,7 @@
 //
 // Finally, let's confirm the hot wallet has received some XRP:
 //
-//    rcl-account -config . -show hot
+//    rcl-account -config . show hot
 //
 // This should show the 100 XRP that we just sent.
 //
