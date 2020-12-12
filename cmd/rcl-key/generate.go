@@ -123,9 +123,9 @@ func init() {
 func opGenerate() error {
 
 	nFlag := command.OperationFlagSet.Int("n", 1, "Number of keypairs to generate.")
-	vanityFlag := command.OperationFlagSet.String("vanity", "", "Optional regular expression to match.")
-	nicknameFlag := command.OperationFlagSet.String("nickname", "", "Give generated address a nickname.")
-	secretFlag := command.OperationFlagSet.String("secret", "", "Use existing secret, instead of generating a new one")
+	vanityFlag := command.OperationFlagSet.String("vanity", "", "optional regular expression to match")
+	nicknameFlag := command.OperationFlagSet.String("nickname", "", "give generated address a nickname")
+	secretFlag := command.OperationFlagSet.String("secret", "", "use existing secret, instead of generating a new one")
 
 	// TODO(dnc): choose any supported curve
 

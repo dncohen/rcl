@@ -49,7 +49,7 @@ func init() {
 		Handler:     opBackup,
 		Name:        "backup",
 		Syntax:      "backup <filename> [...]",
-		Description: "An opportunity to make paper backup of secrets.",
+		Description: "Shows secret keys, providing an opportunity to make paper backup.",
 	})
 }
 

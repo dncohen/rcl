@@ -37,7 +37,7 @@ func init() {
 		Handler:     opSign,
 		Name:        "sign",
 		Syntax:      "sign [<filename> ...]",
-		Description: `Sign RCL transaction(s).  When no filename provided, usnsigned transactions are read from stdin.  Signed transaction written to stdout.`,
+		Description: `Sign RCL transactions.  Unsigned transactions are read from stdin or files.  Signed transactions are written to stdout.`,
 	})
 }
 
