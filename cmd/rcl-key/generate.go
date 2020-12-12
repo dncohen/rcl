@@ -18,8 +18,17 @@
 //
 // Generate new keypairs and addresses for use on the Ripple Consensus Ledger.
 //
-// Generated keys are saved to a file named 'rcl-key-<address>.cfg'.
-// The file is not encrypted, so handle with care.
+// Generated keys are saved to a file named '[ADDRESS].rcl-key', where
+// [ADDRESS] is the address derived from the public key. The file is
+// not encrypted, so handle with care.
+//
+// After generating `.rcl-key` files, run the `backup` operation.
+// Doing so generates a `.cfg` file containing the public address and
+// no secret.  It is this `.cfg` file that other rcl tools commands
+// will read. It is recommended to keep `.rcl-key` files on an
+// offline, secure machine for signing transactions.  The `.cfg` files
+// can be copied to online machines where transactions are composed.
+//
 package main
 
 import (

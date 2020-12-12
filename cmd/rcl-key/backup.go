@@ -15,7 +15,20 @@
 
 // Operation backup
 //
-// View a generated secret, so that it can be copied to paper.
+// The backup operation's primary function is to show, in your
+// terminal, a secret produced by the generate operation. This allows
+// you to copy the secret to a paper backup.
+//
+// The backup operation also produces a `.cfg` file that corresponds
+// to an `.rcl-key` file. Note each `.rcl-key` files contains an
+// unencrypted secret, and should be handled securely.  The
+// corresponding `.cfg` created by this operation contains a public
+// address and optional nickname; it does not include a secret key, so
+// may be shared and stored less securely.
+//
+// The `.rcl-key` file must be available to the `rcl-key` command when
+// signing transactions.  While the `.cfg` file should be available to
+// the `rcl-tx` command when composing transaction.
 //
 package main
 
