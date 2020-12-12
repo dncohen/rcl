@@ -154,7 +154,7 @@ func opGenerate() error {
 		command.V(1).Infof("Attempting to generate %d address matching %q.", *nFlag, *vanityFlag)
 
 		// prepare to filter matches
-		unmatched = make(chan *Key, *nFlag)
+		unmatched = make(chan *Key, 1)
 		go func() {
 			for k := range unmatched {
 				if exp.MatchString(k.Account.String()) {
@@ -200,6 +200,10 @@ func opGenerate() error {
 		}
 	}
 
+	if len(keyIn) > 0 {
+		*nFlag = 1 // so only one worker will be started
+	}
+
 	workers := *nFlag
 	if workers > runtime.NumCPU() {
 		workers = runtime.NumCPU()
@@ -209,7 +213,7 @@ func opGenerate() error {
 	for i := 0; i < workers; i++ {
 		// start a worker
 		go func() {
-			for saves < *nFlag || saves < len(keyIn) {
+			for saves < *nFlag {
 				var key *key
 				var err error
 				if *secretFlag {
@@ -220,13 +224,14 @@ func opGenerate() error {
 				}
 				command.Check(err)
 
-				pairs++
 				hash, err := key.seed.Hash()
 				if err != nil {
 					command.Error(err) // reached?
 					continue
 				}
+
 				unmatched <- &Key{Account: key.account, Secret: hash.String()}
+				pairs++
 			}
 			log.Println("worker exiting") // debug
 		}()
