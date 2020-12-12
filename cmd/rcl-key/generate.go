@@ -37,10 +37,12 @@ import (
 	"log"
 	"regexp"
 	"runtime"
+	"syscall"
 	"time"
 
 	"github.com/pkg/errors"
 	"github.com/rubblelabs/ripple/data"
+	"golang.org/x/crypto/ssh/terminal"
 	"src.d10.dev/command"
 )
 
@@ -125,7 +127,7 @@ func opGenerate() error {
 	nFlag := command.OperationFlagSet.Int("n", 1, "Number of keypairs to generate.")
 	vanityFlag := command.OperationFlagSet.String("vanity", "", "optional regular expression to match")
 	nicknameFlag := command.OperationFlagSet.String("nickname", "", "give generated address a nickname")
-	secretFlag := command.OperationFlagSet.String("secret", "", "use existing secret, instead of generating a new one")
+	secretFlag := command.OperationFlagSet.Bool("secret", false, "prompt for existing secret, instead of generating a new one")
 
 	// TODO(dnc): choose any supported curve
 
@@ -136,10 +138,6 @@ func opGenerate() error {
 
 	if *nFlag <= 0 {
 		return fmt.Errorf("count parameter (%d) must be positive number", *nFlag)
-	}
-
-	if *secretFlag != "" && *nFlag != 1 {
-		return errors.New("when -secret flag is present, -n flag must be one.")
 	}
 
 	matched := make(chan *Key, 0) // addresses that match vanity expression
@@ -169,15 +167,53 @@ func opGenerate() error {
 		}()
 	}
 
+	var keyIn []*key
+	for *secretFlag {
+		if len(keyIn) == 0 {
+			fmt.Printf("Enter RCL secret key: ")
+		} else {
+			fmt.Printf("Enter RCL secret key #%d (or return to continue): ", len(keyIn)+1)
+		}
+		b, err := terminal.ReadPassword(int(syscall.Stdin))
+		fmt.Println("") // newline
+		command.Check(err)
+
+		if len(b) == 0 {
+			if len(keyIn) == 0 {
+				command.Check(errors.New("no secret provided, exiting"))
+			}
+			break
+		}
+		key, err := newKey(string(b))
+		if err != nil {
+			// err may leak secret key, so we do not show it here
+			// fmt.Println(err)
+			fmt.Println("bad secret key, please try again (or return to continue)")
+			continue
+		}
+
+		keyIn = append(keyIn, key)
+		fmt.Printf("secret for address %q entered\n", key.account)
+
+		if len(keyIn) >= *nFlag {
+			break
+		}
+	}
+
+	workers := *nFlag
+	if workers > runtime.NumCPU() {
+		workers = runtime.NumCPU()
+	}
+
 	// generate key(s)
-	for i := 0; i < runtime.NumCPU(); i++ {
+	for i := 0; i < workers; i++ {
 		// start a worker
 		go func() {
-			for saves < *nFlag {
+			for saves < *nFlag || saves < len(keyIn) {
 				var key *key
 				var err error
-				if *secretFlag != "" {
-					key, err = newKey(*secretFlag)
+				if *secretFlag {
+					key = keyIn[saves]
 				} else {
 					seq := uint32(0)
 					key, err = generate(data.ECDSA, &seq)
