@@ -200,15 +200,14 @@ func opGenerate() error {
 		}
 	}
 
-	if len(keyIn) > 0 {
-		*nFlag = 1 // so only one worker will be started
-	}
-
 	workers := *nFlag
+	if len(keyIn) > 0 {
+		workers = 1 // so only one worker will be started when keys are passed in
+		*nFlag = len(keyIn)
+	}
 	if workers > runtime.NumCPU() {
 		workers = runtime.NumCPU()
 	}
-
 	// generate key(s)
 	for i := 0; i < workers; i++ {
 		// start a worker
@@ -217,7 +216,10 @@ func opGenerate() error {
 				var key *key
 				var err error
 				if *secretFlag {
-					key = keyIn[saves]
+					if pairs >= len(keyIn) {
+						break
+					}
+					key = keyIn[pairs]
 				} else {
 					seq := uint32(0)
 					key, err = generate(data.ECDSA, &seq)
