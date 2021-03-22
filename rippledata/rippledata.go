@@ -53,20 +53,23 @@ func (this Client) Endpoint(segment ...string) *url.URL {
 	return endpoint
 }
 
-var getError = errors.New("GET failed")
+var errGetFail = errors.New("GET failed")
+var errStupid = errors.New("rippledata API fail")
 
 // Get method submits a query to the Ripple Data API and returns response.  If a request fails, Get retries, possibly several times.
 func (this Client) Get(response DataResponse, endpoint *url.URL, values *url.Values) error {
 	count := 0
 	// retry several times if necessary, because data api is intermittently unavailable
+	// may be caused by rate limiter
 	for {
 		count++
 		err := this.get(response, endpoint, values)
-		if err != nil && errors.Cause(err) == getError {
+		if err != nil && (errors.Is(err, errStupid)) {
 			if count > 10 {
 				return errors.Wrapf(err, "rippledata GET failed (%d attempts)", count)
 			}
-			<-time.After(time.Duration(count) * time.Second) // wait between attempts
+			log.Printf("failed attempt %d to GET %s: %s\n", count, endpoint, err) // verbose
+			<-time.After(time.Duration(count) * 30 * time.Second)                 // wait between attempts
 		} else {
 			return err
 		}
@@ -107,17 +110,29 @@ func unmarshal(response DataResponse, r io.Reader) error {
 		return err
 	}
 
-	// Now get the result from the raw
-	response.setRaw(raw)
+	// apparently ripple put a rate limiter in front of the API, and it
+	// returns a JSON dialect with no relation to the rest of the API.
+
+	var stupid = struct {
+		Error string `json:"error"`
+	}{}
+	err = json.Unmarshal(raw, &stupid)
+	if err == nil && stupid.Error != "" {
+		return fmt.Errorf("%w: %s", errStupid, stupid.Error)
+	}
 
 	triage, ok := response.(triager)
 	if ok {
 		raw = triage.triage(raw) // kludge to align what Data API returns to be more like what rippled API returns
 	}
 
+	// Now get the result from the raw
+	response.setRaw(raw)
+
 	err = json.Unmarshal(raw, response)
 	if err == nil && response.GetResult() != "success" {
-		return fmt.Errorf("result %q, response %q", response.GetResult(), response.GetMessage())
+		log.Println(string(raw))
+		return fmt.Errorf("result %q, response %q: %w", response.GetResult(), response.GetMessage(), errGetFail)
 	}
 
 	postop, ok := response.(postoper)
