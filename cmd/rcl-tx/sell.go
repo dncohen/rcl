@@ -162,7 +162,7 @@ func opSell() error {
 
 		// TODO: inspect other side of order book and determine if offer will cross.
 		if ratRatio.Compare(one) > 0 {
-			command.Infof("placing offer at TOP of order book")
+			command.Infof("placing crossing offer into order book")
 		}
 
 	}
